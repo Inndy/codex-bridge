@@ -1,0 +1,66 @@
+package main
+
+import (
+	"strings"
+	"testing"
+)
+
+func TestReadSSE(t *testing.T) {
+	var events []SSEEvent
+	err := readSSE(strings.NewReader("event: message\ndata: {\"x\":1}\n\ndata: [DONE]\n\n"), func(event SSEEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events = %#v", events)
+	}
+	if events[0].Event != "message" || events[0].Data != `{"x":1}` {
+		t.Fatalf("first event = %#v", events[0])
+	}
+	if events[1].Data != "[DONE]" {
+		t.Fatalf("done event = %#v", events[1])
+	}
+}
+
+func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
+	agg := NewStreamAggregator()
+	events := []string{
+		`{"type":"response.output_text.delta","delta":"O"}`,
+		`{"type":"response.output_text.delta","delta":"K"}`,
+		`{"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"item_1","delta":"{\"path\""}`,
+		`{"type":"response.function_call_arguments.delta","item_id":"item_1","delta":":\"a\"}"}`,
+		`{"type":"response.completed","response":{"status":"completed","usage":{"input_tokens":2,"output_tokens":3,"total_tokens":5,"input_tokens_details":{"cached_tokens":1},"output_tokens_details":{"reasoning_tokens":2}}}}`,
+	}
+	var chunkCount int
+	for _, data := range events {
+		chunks, err := agg.ApplyEvent(SSEEvent{Data: data})
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunkCount += len(chunks)
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	if *completion.Choices[0].Message.Content != "OK" {
+		t.Fatalf("content = %#v", completion.Choices[0].Message.Content)
+	}
+	if completion.Choices[0].Message.ToolCalls[0].Function.Arguments != `{"path":"a"}` {
+		t.Fatalf("tool args = %#v", completion.Choices[0].Message.ToolCalls)
+	}
+	if completion.Choices[0].FinishReason != "tool_calls" {
+		t.Fatalf("finish reason = %q", completion.Choices[0].FinishReason)
+	}
+	usage := completion.Usage.(map[string]any)
+	if usage["prompt_tokens"] != int64(2) || usage["completion_tokens"] != int64(3) || usage["total_tokens"] != int64(5) {
+		t.Fatalf("usage = %#v", usage)
+	}
+	if details := usage["completion_tokens_details"].(map[string]any); details["reasoning_tokens"] != int64(2) {
+		t.Fatalf("usage details = %#v", usage)
+	}
+	if chunkCount != 5 {
+		t.Fatalf("chunk count = %d", chunkCount)
+	}
+}
