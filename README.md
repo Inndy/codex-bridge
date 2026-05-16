@@ -139,3 +139,30 @@ go mod tidy
 - No OpenAI API key fallback.
 - Production code uses only Go standard library packages.
 - Logging uses `log/slog` and does not log tokens or full prompt bodies.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
+
+## References and Thanks
+
+`codex-bridge` is an independent, API-compatible Go implementation. It is not a
+clean-room rewrite. The implementation is based on observed behavior and
+interoperability requirements, and does not intentionally copy source code from
+referenced projects.
+
+These projects helped verify API behavior and edge cases:
+
+- [OpenAI Codex](https://github.com/openai/codex), for the official Codex
+  client behavior around auth headers, model catalog requests, Responses API
+  request shape, usage fields, and reasoning stream events.
+- [auth2api](https://github.com/AmazingAng/auth2api), for independent evidence
+  of ChatGPT Codex backend quirks such as forced streaming, required
+  instructions, and rejected public Responses fields.
+- [codex-openai-proxy](https://github.com/Securiteru/codex-openai-proxy), for
+  earlier proxy work in this problem space.
+- `openai-oauth`, for another reference implementation of reusing existing
+  Codex/OpenAI OAuth session material.
+
+Thanks to the authors and maintainers of those projects. This repository does
+not vendor their code. Referenced projects were used read-only.
