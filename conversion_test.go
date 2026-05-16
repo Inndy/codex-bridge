@@ -8,9 +8,10 @@ import (
 func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 	rawChoice := json.RawMessage(`{"type":"function","function":{"name":"read_file"}}`)
 	req := ChatCompletionRequest{
-		Model:      "gpt-test",
-		Stream:     false,
-		ToolChoice: rawChoice,
+		Model:             "gpt-test",
+		Stream:            false,
+		ToolChoice:        rawChoice,
+		ParallelToolCalls: new(false),
 		Messages: []ChatMessage{
 			{Role: "system", Content: "be brief"},
 			{Role: "user", Content: "read config"},
@@ -39,6 +40,9 @@ func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 	}
 	if body["model"] != "gpt-test" || body["stream"] != true || body["store"] != false {
 		t.Fatalf("unexpected common body fields: %#v", body)
+	}
+	if _, ok := body["parallel_tool_calls"]; ok {
+		t.Fatalf("parallel_tool_calls should be stripped for codex: %#v", body)
 	}
 	input := body["input"].([]any)
 	if len(input) != 3 {

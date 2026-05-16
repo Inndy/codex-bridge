@@ -28,6 +28,8 @@ func TestReadSSE(t *testing.T) {
 func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
 	agg := NewStreamAggregator()
 	events := []string{
+		`{"type":"response.reasoning_summary_text.delta","delta":"thinking"}`,
+		`{"type":"response.reasoning_text.delta","delta":" raw"}`,
 		`{"type":"response.output_text.delta","delta":"O"}`,
 		`{"type":"response.output_text.delta","delta":"K"}`,
 		`{"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
@@ -47,6 +49,9 @@ func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
 	if *completion.Choices[0].Message.Content != "OK" {
 		t.Fatalf("content = %#v", completion.Choices[0].Message.Content)
 	}
+	if completion.Choices[0].Message.ReasoningContent != "thinking raw" {
+		t.Fatalf("reasoning = %q", completion.Choices[0].Message.ReasoningContent)
+	}
 	if completion.Choices[0].Message.ToolCalls[0].Function.Arguments != `{"path":"a"}` {
 		t.Fatalf("tool args = %#v", completion.Choices[0].Message.ToolCalls)
 	}
@@ -60,7 +65,7 @@ func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
 	if details := usage["completion_tokens_details"].(map[string]any); details["reasoning_tokens"] != int64(2) {
 		t.Fatalf("usage details = %#v", usage)
 	}
-	if chunkCount != 5 {
+	if chunkCount != 7 {
 		t.Fatalf("chunk count = %d", chunkCount)
 	}
 }

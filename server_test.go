@@ -24,6 +24,9 @@ func TestModelsHandlerMapsUpstreamModels(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer access_1" {
 			t.Fatalf("authorization = %q", got)
 		}
+		if got := r.Header.Get("OpenAI-Beta"); got != "" {
+			t.Fatalf("unexpected OpenAI-Beta header = %q", got)
+		}
 		writeJSON(w, http.StatusOK, map[string]any{
 			"models": []map[string]any{{"slug": "gpt-test"}},
 		})

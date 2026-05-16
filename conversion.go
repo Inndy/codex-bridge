@@ -73,9 +73,6 @@ func toResponsesRequest(req ChatCompletionRequest) map[string]any {
 	if req.Stop != nil {
 		body["stop"] = req.Stop
 	}
-	if req.ParallelToolCalls != nil {
-		body["parallel_tool_calls"] = *req.ParallelToolCalls
-	}
 	if req.ReasoningEffort != "" {
 		body["reasoning"] = map[string]any{"effort": req.ReasoningEffort}
 	}

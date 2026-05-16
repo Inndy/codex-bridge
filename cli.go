@@ -34,7 +34,7 @@ func parseConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.Addr, "addr", "127.0.0.1:8080", "listen address")
 	fs.StringVar(&cfg.AuthPath, "auth-path", "", "path to Codex auth.json")
 	fs.StringVar(&cfg.CodexBaseURL, "codex-base-url", "https://chatgpt.com/backend-api/codex", "Codex backend base URL")
-	fs.StringVar(&cfg.CodexVersion, "codex-version", "0.111.0", "Codex client version used for model discovery")
+	fs.StringVar(&cfg.CodexVersion, "codex-version", "0.125.0", "Codex client version used for model discovery")
 	fs.StringVar(&cfg.AuthFailHook, "auth-fail-hook", "", "command to run after Codex auth failure")
 	fs.Var(&hookArgs, "auth-fail-hook-arg", "argument for --auth-fail-hook; may be repeated")
 	fs.DurationVar(&cfg.AuthHookTimeout, "auth-hook-timeout", time.Minute, "auth failure hook timeout")

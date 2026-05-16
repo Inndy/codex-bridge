@@ -41,7 +41,7 @@ codex-bridge \
   --addr 127.0.0.1:8080 \
   --auth-path ~/.codex/auth.json \
   --codex-base-url https://chatgpt.com/backend-api/codex \
-  --codex-version 0.111.0
+  --codex-version 0.125.0
 ```
 
 Auth lookup order:

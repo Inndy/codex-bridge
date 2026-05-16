@@ -25,9 +25,10 @@ type ChatChoice struct {
 }
 
 type ChatResponseMessage struct {
-	Role      string              `json:"role"`
-	Content   *string             `json:"content"`
-	ToolCalls []OpenAIToolCallOut `json:"tool_calls,omitempty"`
+	Role             string              `json:"role"`
+	Content          *string             `json:"content"`
+	ReasoningContent string              `json:"reasoning_content,omitempty"`
+	ToolCalls        []OpenAIToolCallOut `json:"tool_calls,omitempty"`
 }
 
 type OpenAIToolCallOut struct {
@@ -43,6 +44,7 @@ type OpenAIFunctionCall struct {
 
 type StreamAggregator struct {
 	text              string
+	reasoning         string
 	finishReason      string
 	usage             any
 	toolOrder         []string
@@ -78,6 +80,12 @@ func (a *StreamAggregator) ApplyEvent(event SSEEvent) ([]map[string]any, error) 
 		if delta != "" {
 			a.text += delta
 			chunks = append(chunks, map[string]any{"content": delta})
+		}
+	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+		delta, _ := raw["delta"].(string)
+		if delta != "" {
+			a.reasoning += delta
+			chunks = append(chunks, map[string]any{"reasoning_content": delta})
 		}
 	case "response.function_call_arguments.delta":
 		callID := a.callIDForRaw(raw)
@@ -136,9 +144,10 @@ func (a *StreamAggregator) Completion(id, model string, created int64) ChatCompl
 		Choices: []ChatChoice{{
 			Index: 0,
 			Message: ChatResponseMessage{
-				Role:      "assistant",
-				Content:   content,
-				ToolCalls: toolCalls,
+				Role:             "assistant",
+				Content:          content,
+				ReasoningContent: a.reasoning,
+				ToolCalls:        toolCalls,
 			},
 			FinishReason: finish,
 		}},
@@ -173,22 +182,39 @@ func (a *StreamAggregator) applyFunctionItem(item map[string]any, emitStart bool
 
 func (a *StreamAggregator) applyMessageItem(item map[string]any) {
 	itemType, _ := item["type"].(string)
-	if itemType != "message" {
-		return
-	}
-	content, ok := item["content"].([]any)
-	if !ok {
-		return
-	}
-	for _, part := range content {
-		m, ok := part.(map[string]any)
+	switch itemType {
+	case "message":
+		content, ok := item["content"].([]any)
 		if !ok {
-			continue
+			return
 		}
-		text, _ := m["text"].(string)
-		if text != "" && a.text == "" {
-			a.text = text
+		for _, part := range content {
+			m, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			text, _ := m["text"].(string)
+			if text != "" && a.text == "" {
+				a.text = text
+			}
 		}
+	case "reasoning":
+		summary, ok := item["summary"].([]any)
+		if !ok {
+			return
+		}
+		for _, part := range summary {
+			m, ok := part.(map[string]any)
+			if !ok {
+				continue
+			}
+			text, _ := m["text"].(string)
+			if text != "" {
+				a.reasoning += text
+			}
+		}
+	default:
+		return
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 )
@@ -97,10 +98,15 @@ func (c *UpstreamClient) newRequest(ctx context.Context, method, path string, bo
 		return nil, err
 	}
 	auth := c.auth.Current()
+	version := c.codexVersion
+	if version == "" {
+		version = "0.125.0"
+	}
 	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
 	req.Header.Set("chatgpt-account-id", auth.AccountID)
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("User-Agent", "codex-bridge/0")
+	req.Header.Set("originator", "codex_cli_rs")
+	req.Header.Set("version", version)
+	req.Header.Set("User-Agent", "codex_cli_rs/"+version+" ("+runtime.GOOS+"; "+runtime.GOARCH+")")
 	return req, nil
 }
 

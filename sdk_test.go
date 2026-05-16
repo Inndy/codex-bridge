@@ -50,7 +50,7 @@ func TestSmokeLiveOptIn(t *testing.T) {
 	if err := auth.Load(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	upstream := NewUpstreamClient("https://chatgpt.com/backend-api/codex", "0.111.0", auth)
+	upstream := NewUpstreamClient("https://chatgpt.com/backend-api/codex", "0.125.0", auth)
 	models := NewModelCache(upstream, time.Minute)
 	server := httptest.NewServer(NewServer(upstream, models, auth, logger).Routes())
 	defer server.Close()
