@@ -14,6 +14,14 @@ definitions, assistant tool calls, tool outputs, and streamed tool-call argument
 deltas are translated between OpenAI chat completions and Codex Responses API
 shapes.
 
+## Why
+
+Similar bridges already existed when this project was built, but the available
+implementations were either more complicated than needed or relied on third-party
+runtime libraries. This proxy keeps the production code small and uses only the
+Go standard library, reducing dependency surface and supply-chain risk. It is
+also intended to make the entire production codebase easy to review end to end.
+
 ## Install
 
 ```sh
@@ -51,15 +59,14 @@ Auth lookup order:
 3. `~/.codex/auth.json`
 4. sorted `~/.codex*/auth.json`
 
-The auth file must contain `tokens.access_token` and `tokens.account_id`.
-If `tokens.account_id` is missing, `codex-bridge` tries to derive it from
-`tokens.id_token`.
+The auth file must contain `tokens.access_token`. If `tokens.account_id` is
+missing, `codex-bridge` tries to derive it from `tokens.id_token`.
 
 ## Auth Failure Hook
 
 `codex-bridge` validates auth at startup with `/models`. If Codex returns
-`401` or `403`, it can run a user-provided hook once, reload auth, and retry.
-The same one-time retry also happens for runtime upstream auth failures.
+`401` or `403`, it can run a user-provided hook, reload auth, and retry.
+The same retry also happens for runtime upstream auth failures.
 
 Hook execution uses argument slices, not shell string parsing:
 
@@ -128,7 +135,7 @@ Tests use the official `github.com/openai/openai-go/v3` SDK where useful. The
 SDK is test-only. To strip test dependencies:
 
 ```sh
-find . -name "*_test.go" | xargs rm
+rm *_test.go
 go mod tidy
 ```
 
