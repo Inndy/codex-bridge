@@ -173,3 +173,25 @@ These projects helped verify API behavior and edge cases:
 
 Thanks to the authors and maintainers of those projects. This repository does
 not vendor their code. Referenced projects were used read-only.
+
+## Legal and Risk Notice
+
+`codex-bridge` is unofficial and is not affiliated with OpenAI.
+
+Current public signals suggest OpenAI allows third-party Codex integrations:
+OpenAI documents official Codex integration paths, and OpenClaw publicly
+documents Codex OAuth use in external tools. In practice, OpenAI's current
+stance appears permissive toward this kind of use.
+
+That may change. This project depends on Codex OAuth/backend behavior that may
+change due to product policy, EULA/terms updates, abuse controls, quota changes,
+or backend implementation changes. If that happens, `codex-bridge` may stop
+working or may no longer be appropriate to use.
+
+Users are responsible for understanding the terms and risks that apply to their
+own account and use case. Do not use this project for multi-user proxying,
+resale, shared-account access, or production use where official OpenAI API or
+Codex integration paths are required.
+
+Reference: [OpenClaw Docs](https://web.archive.org/web/20260506014812/https://docs.openclaw.ai/concepts/oauth#openai-codex-chatgpt-oauth) state:
+> OpenAI Codex OAuth is explicitly supported for use outside the Codex CLI, including OpenClaw workflows.
