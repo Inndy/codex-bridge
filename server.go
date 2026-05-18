@@ -12,15 +12,13 @@ import (
 
 type Server struct {
 	upstream *UpstreamClient
-	models   *ModelCache
 	auth     *AuthManager
 	logger   *slog.Logger
 }
 
-func NewServer(upstream *UpstreamClient, models *ModelCache, auth *AuthManager, logger *slog.Logger) *Server {
+func NewServer(upstream *UpstreamClient, auth *AuthManager, logger *slog.Logger) *Server {
 	return &Server{
 		upstream: upstream,
-		models:   models,
 		auth:     auth,
 		logger:   logger,
 	}
@@ -53,10 +51,10 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed.", "invalid_request_error")
 		return
 	}
-	models, status, err := s.models.Models(r.Context())
+	models, status, err := s.upstream.Models(r.Context())
 	if err != nil && isAuthStatus(status) {
 		if hookErr := s.auth.HandleAuthFailure(r.Context()); hookErr == nil {
-			models, status, err = s.models.Models(r.Context())
+			models, status, err = s.upstream.Models(r.Context())
 		} else {
 			err = errors.Join(err, hookErr)
 		}

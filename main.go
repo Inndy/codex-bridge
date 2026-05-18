@@ -26,11 +26,10 @@ func main() {
 		os.Exit(1)
 	}
 	upstream := NewUpstreamClient(cfg.CodexBaseURL, cfg.CodexVersion, auth)
-	models := NewModelCache(upstream, 5*time.Minute)
-	if _, status, err := models.Models(ctx); err != nil {
+	if _, status, err := upstream.Models(ctx); err != nil {
 		if isAuthStatus(status) && cfg.AuthFailHook != "" {
 			if hookErr := auth.HandleAuthFailure(ctx); hookErr == nil {
-				_, _, err = models.Models(ctx)
+				_, _, err = upstream.Models(ctx)
 			} else {
 				err = hookErr
 			}
@@ -40,7 +39,7 @@ func main() {
 			os.Exit(1)
 		}
 	}
-	server := NewServer(upstream, models, auth, logger)
+	server := NewServer(upstream, auth, logger)
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Routes(),
