@@ -142,16 +142,15 @@ func deriveAccountID(idToken string) string {
 			return ""
 		}
 	}
-	var claims map[string]any
+	var claims struct {
+		OpenAIAuth struct {
+			ChatGPTAccountID string `json:"chatgpt_account_id"`
+		} `json:"https://api.openai.com/auth"`
+	}
 	if err := json.Unmarshal(payload, &claims); err != nil {
 		return ""
 	}
-	authClaim, ok := claims["https://api.openai.com/auth"].(map[string]any)
-	if !ok {
-		return ""
-	}
-	accountID, _ := authClaim["chatgpt_account_id"].(string)
-	return accountID
+	return claims.OpenAIAuth.ChatGPTAccountID
 }
 
 func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger) error {
