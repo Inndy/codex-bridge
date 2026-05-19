@@ -51,11 +51,9 @@ func toResponsesRequest(req ChatCompletionRequest) map[string]any {
 		"stream": true,
 		"store":  false,
 	}
-	instructions := collectInstructions(req.Messages)
-	if instructions == "" {
-		instructions = "You are a helpful AI assistant."
+	if instructions := collectInstructions(req.Messages); instructions != "" {
+		body["instructions"] = instructions
 	}
-	body["instructions"] = instructions
 	if len(req.Tools) > 0 {
 		body["tools"] = toResponsesTools(req.Tools)
 	}
