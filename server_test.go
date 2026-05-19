@@ -137,7 +137,7 @@ func TestRuntimeAuthFailureRunsHookAndRetries(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := NewUpstreamClient(upstream.URL, "test", auth)
-	server := httptest.NewServer(NewServer(client, NewModelCache(client, time.Minute), auth, logger).Routes())
+	server := httptest.NewServer(NewServer(client, auth, logger).Routes())
 	defer server.Close()
 
 	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"gpt-test","messages":[{"role":"user","content":"say ok"}]}`))
@@ -173,7 +173,7 @@ func newTestProxy(t *testing.T, upstreamHandler http.Handler) *httptest.Server {
 		t.Fatal(err)
 	}
 	client := NewUpstreamClient(upstream.URL, "test", auth)
-	return httptest.NewServer(NewServer(client, NewModelCache(client, time.Minute), auth, logger).Routes())
+	return httptest.NewServer(NewServer(client, auth, logger).Routes())
 }
 
 func writeAuthFile(t *testing.T, path, accessToken string) {
