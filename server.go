@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -51,14 +52,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed.", "invalid_request_error")
 		return
 	}
-	models, status, err := s.upstream.Models(r.Context())
-	if err != nil && isAuthStatus(status) {
-		if hookErr := s.auth.HandleAuthFailure(r.Context()); hookErr == nil {
-			models, status, err = s.upstream.Models(r.Context())
-		} else {
-			err = errors.Join(err, hookErr)
-		}
-	}
+	models, status, err := s.modelsWithRetry(r.Context())
 	if err != nil {
 		code := http.StatusBadGateway
 		if status > 0 {
@@ -104,7 +98,7 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "`messages` must be a non-empty array.", "invalid_request_error")
 		return
 	}
-	resp, err := s.createResponseWithRetry(r.Context(), toResponsesRequest(req))
+	resp, err := s.responsesWithRetry(r.Context(), toResponsesRequest(req))
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "chat request failed", "request_id", requestID, "model", req.Model, "stream", req.Stream, "duration_ms", time.Since(start).Milliseconds(), "error", err)
 		writeOpenAIError(w, http.StatusBadGateway, err.Error(), "upstream_error")
@@ -125,17 +119,26 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	s.completeChat(w, r, resp, requestID, id, created, req.Model, start)
 }
 
-func (s *Server) createResponseWithRetry(ctx context.Context, body map[string]any) (*http.Response, error) {
-	resp, err := s.upstream.Responses(ctx, body)
-	if err != nil {
-		return nil, err
+func (s *Server) modelsWithRetry(ctx context.Context) ([]string, int, error) {
+	models, status, err := s.upstream.Models(ctx)
+	if err == nil || !isAuthStatus(status) {
+		return models, status, err
 	}
-	if !isAuthStatus(resp.StatusCode) {
-		return resp, nil
+	if hookErr := s.auth.HandleAuthFailure(ctx); hookErr != nil {
+		return models, status, errors.Join(err, hookErr)
+	}
+	return s.upstream.Models(ctx)
+}
+
+func (s *Server) responsesWithRetry(ctx context.Context, body map[string]any) (*http.Response, error) {
+	resp, err := s.upstream.Responses(ctx, body)
+	if err != nil || !isAuthStatus(resp.StatusCode) {
+		return resp, err
 	}
 	drainAndClose(resp)
-	if err := s.auth.HandleAuthFailure(ctx); err != nil {
-		return nil, err
+	upstreamErr := fmt.Errorf("upstream status %d before auth refresh", resp.StatusCode)
+	if hookErr := s.auth.HandleAuthFailure(ctx); hookErr != nil {
+		return nil, errors.Join(upstreamErr, hookErr)
 	}
 	return s.upstream.Responses(ctx, body)
 }

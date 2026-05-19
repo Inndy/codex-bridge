@@ -26,20 +26,11 @@ func main() {
 		os.Exit(1)
 	}
 	upstream := NewUpstreamClient(cfg.CodexBaseURL, cfg.CodexVersion, auth)
-	if _, status, err := upstream.Models(ctx); err != nil {
-		if isAuthStatus(status) && cfg.AuthFailHook != "" {
-			if hookErr := auth.HandleAuthFailure(ctx); hookErr == nil {
-				_, _, err = upstream.Models(ctx)
-			} else {
-				err = hookErr
-			}
-		}
-		if err != nil {
-			logger.Error("startup auth validation failed", "status", status, "error", err)
-			os.Exit(1)
-		}
-	}
 	server := NewServer(upstream, auth, logger)
+	if _, status, err := server.modelsWithRetry(ctx); err != nil {
+		logger.Error("startup auth validation failed", "status", status, "error", err)
+		os.Exit(1)
+	}
 	httpServer := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           server.Routes(),
