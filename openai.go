@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,6 +45,7 @@ type OpenAIFunctionCall struct {
 }
 
 type StreamAggregator struct {
+	logger            *slog.Logger
 	text              string
 	reasoning         string
 	finishReason      string
@@ -55,6 +57,42 @@ type StreamAggregator struct {
 	nextSyntheticTool int
 }
 
+type streamEvent struct {
+	Type        string             `json:"type"`
+	Delta       string             `json:"delta"`
+	CallID      string             `json:"call_id"`
+	ItemID      string             `json:"item_id"`
+	OutputIndex *int               `json:"output_index"`
+	Item        *responseItem      `json:"item"`
+	Response    *completedResponse `json:"response"`
+}
+
+type responseItem struct {
+	Type      string        `json:"type"`
+	ID        string        `json:"id"`
+	CallID    string        `json:"call_id"`
+	Name      string        `json:"name"`
+	Arguments string        `json:"arguments"`
+	Content   []contentPart `json:"content"`
+	Summary   []contentPart `json:"summary"`
+}
+
+type contentPart struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
+}
+
+type completedResponse struct {
+	Status            string             `json:"status"`
+	Usage             json.RawMessage    `json:"usage"`
+	Output            []responseItem     `json:"output"`
+	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
+}
+
+type incompleteDetails struct {
+	Reason string `json:"reason"`
+}
+
 // syntheticCallIDPrefix is the prefix used for fabricated tool-call IDs when
 // the upstream Codex stream omits a real call_id. Using a distinct prefix from
 // upstream's `call_...` namespace means the aggregator can never collapse a
@@ -62,8 +100,12 @@ type StreamAggregator struct {
 // tool_call_id surfaces as an upstream rejection instead of silent corruption.
 const syntheticCallIDPrefix = "synth_call_"
 
-func NewStreamAggregator() *StreamAggregator {
+func NewStreamAggregator(logger *slog.Logger) *StreamAggregator {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	return &StreamAggregator{
+		logger:            logger,
 		toolCalls:         map[string]*OpenAIToolCallOut{},
 		activeToolItemID:  map[string]string{},
 		syntheticByOutput: map[int]string{},
@@ -74,11 +116,12 @@ func (a *StreamAggregator) ApplyEvent(event SSEEvent) ([]map[string]any, error) 
 	if event.Data == "" || event.Data == "[DONE]" {
 		return nil, nil
 	}
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(event.Data), &raw); err != nil {
+	var ev streamEvent
+	if err := json.Unmarshal([]byte(event.Data), &ev); err != nil {
+		a.logger.Warn("upstream SSE event failed schema decode", "error", err, "data", event.Data)
 		return nil, err
 	}
-	eventType, _ := raw["type"].(string)
+	eventType := ev.Type
 	if eventType == "" {
 		eventType = event.Event
 	}
@@ -86,41 +129,38 @@ func (a *StreamAggregator) ApplyEvent(event SSEEvent) ([]map[string]any, error) 
 	var chunks []map[string]any
 	switch eventType {
 	case "response.output_text.delta":
-		delta, _ := raw["delta"].(string)
-		if delta != "" {
-			a.text += delta
-			chunks = append(chunks, map[string]any{"content": delta})
+		if ev.Delta != "" {
+			a.text += ev.Delta
+			chunks = append(chunks, map[string]any{"content": ev.Delta})
 		}
 	case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-		delta, _ := raw["delta"].(string)
-		if delta != "" {
-			a.reasoning += delta
-			chunks = append(chunks, map[string]any{"reasoning_content": delta})
+		if ev.Delta != "" {
+			a.reasoning += ev.Delta
+			chunks = append(chunks, map[string]any{"reasoning_content": ev.Delta})
 		}
 	case "response.function_call_arguments.delta":
-		callID := a.callIDForRaw(raw)
-		delta, _ := raw["delta"].(string)
-		if callID != "" && delta != "" {
+		callID := a.callIDFor(ev)
+		if callID != "" && ev.Delta != "" {
 			a.ensureToolCall(callID, "", "")
-			a.toolCalls[callID].Function.Arguments += delta
+			a.toolCalls[callID].Function.Arguments += ev.Delta
 			chunks = append(chunks, map[string]any{
-				"tool_calls": []any{a.toolDelta(callID, "", delta)},
+				"tool_calls": []any{a.toolDelta(callID, "", ev.Delta)},
 			})
 		}
 	case "response.output_item.added":
-		if item, ok := raw["item"].(map[string]any); ok {
-			if delta := a.applyFunctionItem(item, true); delta != nil {
+		if ev.Item != nil {
+			if delta := a.applyFunctionItem(ev.Item, true); delta != nil {
 				chunks = append(chunks, map[string]any{"tool_calls": []any{delta}})
 			}
 		}
 	case "response.output_item.done":
-		if item, ok := raw["item"].(map[string]any); ok {
-			a.applyFunctionItem(item, false)
-			a.applyMessageItem(item)
+		if ev.Item != nil {
+			a.applyFunctionItem(ev.Item, false)
+			a.applyMessageItem(ev.Item)
 		}
 	case "response.completed":
-		if response, ok := raw["response"].(map[string]any); ok {
-			a.applyCompletedResponse(response)
+		if ev.Response != nil {
+			a.applyCompletedResponse(ev.Response)
 		}
 	case "response.failed", "error":
 		return nil, fmt.Errorf("upstream stream error: %s", event.Data)
@@ -165,39 +205,30 @@ func (a *StreamAggregator) Completion(id, model string, created int64) ChatCompl
 	}
 }
 
-func (a *StreamAggregator) applyFunctionItem(item map[string]any, emitStart bool) map[string]any {
-	itemType, _ := item["type"].(string)
-	if itemType != "function_call" {
+func (a *StreamAggregator) applyFunctionItem(item *responseItem, emitStart bool) map[string]any {
+	if item.Type != "function_call" {
 		return nil
 	}
-	callID, _ := item["call_id"].(string)
+	callID := item.CallID
 	if callID == "" {
-		callID, _ = item["id"].(string)
+		callID = item.ID
 	}
-	name, _ := item["name"].(string)
-	args, _ := item["arguments"].(string)
 	if callID == "" {
 		return nil
 	}
-	itemID, _ := item["id"].(string)
-	if itemID != "" {
-		a.activeToolItemID[itemID] = callID
+	if item.ID != "" {
+		a.activeToolItemID[item.ID] = callID
 	}
-	a.ensureToolCall(callID, name, args)
+	a.ensureToolCall(callID, item.Name, item.Arguments)
 	if !emitStart {
 		return nil
 	}
-	return a.toolDelta(callID, name, "")
+	return a.toolDelta(callID, item.Name, "")
 }
 
-func (a *StreamAggregator) applyMessageItem(item map[string]any) {
-	itemType, _ := item["type"].(string)
-	switch itemType {
+func (a *StreamAggregator) applyMessageItem(item *responseItem) {
+	switch item.Type {
 	case "message":
-		content, ok := item["content"].([]any)
-		if !ok {
-			return
-		}
 		// Streaming output_text deltas accumulate into a.text as they arrive.
 		// When the terminal response.completed event later replays the full
 		// message item, we keep the delta-accumulated text rather than
@@ -208,47 +239,34 @@ func (a *StreamAggregator) applyMessageItem(item map[string]any) {
 			return
 		}
 		var b strings.Builder
-		for _, part := range content {
-			m, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			if text, _ := m["text"].(string); text != "" {
-				b.WriteString(text)
+		for _, part := range item.Content {
+			if part.Text != "" {
+				b.WriteString(part.Text)
 			}
 		}
 		a.text = b.String()
 	case "reasoning":
-		summary, ok := item["summary"].([]any)
-		if !ok {
-			return
-		}
-		for _, part := range summary {
-			m, ok := part.(map[string]any)
-			if !ok {
-				continue
-			}
-			text, _ := m["text"].(string)
-			if text != "" {
-				a.reasoning += text
+		for _, part := range item.Summary {
+			if part.Text != "" {
+				a.reasoning += part.Text
 			}
 		}
-	default:
-		return
 	}
 }
 
-func (a *StreamAggregator) applyCompletedResponse(response map[string]any) {
-	if usage, ok := response["usage"]; ok {
-		a.usage = toOpenAIUsage(usage)
-	}
-	if output, ok := response["output"].([]any); ok {
-		for _, item := range output {
-			if m, ok := item.(map[string]any); ok {
-				a.applyFunctionItem(m, false)
-				a.applyMessageItem(m)
-			}
+func (a *StreamAggregator) applyCompletedResponse(response *completedResponse) {
+	if len(response.Usage) > 0 {
+		var raw any
+		if err := json.Unmarshal(response.Usage, &raw); err == nil {
+			a.usage = toOpenAIUsage(raw)
+		} else {
+			a.logger.Warn("upstream usage payload failed to decode", "error", err)
 		}
+	}
+	for i := range response.Output {
+		item := &response.Output[i]
+		a.applyFunctionItem(item, false)
+		a.applyMessageItem(item)
 	}
 	if finish := finishReasonFromResponse(response); finish != "" {
 		a.finishReason = finish
@@ -258,17 +276,16 @@ func (a *StreamAggregator) applyCompletedResponse(response map[string]any) {
 // finishReasonFromResponse maps a Codex/Responses-API terminal status onto an
 // OpenAI Chat Completions finish_reason. "completed" returns the empty string
 // so the caller's tool_calls-vs-stop heuristic still applies.
-func finishReasonFromResponse(response map[string]any) string {
-	status, _ := response["status"].(string)
-	switch status {
+func finishReasonFromResponse(response *completedResponse) string {
+	switch response.Status {
 	case "incomplete":
-		details, _ := response["incomplete_details"].(map[string]any)
-		reason, _ := details["reason"].(string)
+		reason := ""
+		if response.IncompleteDetails != nil {
+			reason = response.IncompleteDetails.Reason
+		}
 		switch reason {
 		case "content_filter":
 			return "content_filter"
-		case "max_output_tokens", "":
-			return "length"
 		default:
 			return "length"
 		}
@@ -318,18 +335,18 @@ func numberOrZero(value any) int64 {
 	}
 }
 
-func (a *StreamAggregator) callIDForRaw(raw map[string]any) string {
-	if callID, _ := raw["call_id"].(string); callID != "" {
-		return callID
+func (a *StreamAggregator) callIDFor(ev streamEvent) string {
+	if ev.CallID != "" {
+		return ev.CallID
 	}
-	if itemID, _ := raw["item_id"].(string); itemID != "" {
-		if callID := a.activeToolItemID[itemID]; callID != "" {
+	if ev.ItemID != "" {
+		if callID := a.activeToolItemID[ev.ItemID]; callID != "" {
 			return callID
 		}
-		return itemID
+		return ev.ItemID
 	}
-	if outputIndex, ok := raw["output_index"].(float64); ok {
-		idx := int(outputIndex)
+	if ev.OutputIndex != nil {
+		idx := *ev.OutputIndex
 		if existing := a.syntheticByOutput[idx]; existing != "" {
 			return existing
 		}

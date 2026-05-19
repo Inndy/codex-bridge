@@ -148,7 +148,7 @@ func (s *Server) responsesWithRetry(ctx context.Context, body map[string]any) (*
 }
 
 func (s *Server) completeChat(w http.ResponseWriter, r *http.Request, resp *http.Response, requestID, id string, created int64, model string, start time.Time) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(s.logger)
 	if err := readSSE(resp.Body, func(event SSEEvent) error {
 		_, err := agg.ApplyEvent(event)
 		return err
@@ -166,7 +166,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, resp *http.R
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 	flusher, _ := w.(http.Flusher)
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(s.logger)
 	_ = writeSSE(w, streamChunk(id, created, model, map[string]any{"role": "assistant"}, nil))
 	if flusher != nil {
 		flusher.Flush()

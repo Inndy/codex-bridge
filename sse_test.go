@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 )
 
 func TestStreamAggregatorSyntheticIDsAreDistinct(t *testing.T) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(nil)
 	events := []string{
 		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"a"}`,
 		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"b"}`,
@@ -37,7 +39,7 @@ func TestStreamAggregatorSyntheticIDsAreDistinct(t *testing.T) {
 }
 
 func TestSyntheticAndRealCallIDsDoNotCollide(t *testing.T) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(nil)
 	events := []string{
 		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"x"}`,
 		`{"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
@@ -67,7 +69,7 @@ func TestSyntheticAndRealCallIDsDoNotCollide(t *testing.T) {
 }
 
 func TestApplyMessageItemPrefersDeltaAccumulatedText(t *testing.T) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(nil)
 	events := []string{
 		`{"type":"response.output_text.delta","delta":"streamed"}`,
 		`{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"replayed"}]}]}}`,
@@ -84,7 +86,7 @@ func TestApplyMessageItemPrefersDeltaAccumulatedText(t *testing.T) {
 }
 
 func TestApplyMessageItemConcatenatesPartsWhenNoDeltas(t *testing.T) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(nil)
 	event := `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello "},{"type":"output_text","text":"world"}]}]}}`
 	if _, err := agg.ApplyEvent(SSEEvent{Data: event}); err != nil {
 		t.Fatal(err)
@@ -109,7 +111,7 @@ func TestFinishReasonMapping(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			agg := NewStreamAggregator()
+			agg := NewStreamAggregator(nil)
 			if _, err := agg.ApplyEvent(SSEEvent{Data: c.event}); err != nil {
 				t.Fatal(err)
 			}
@@ -118,6 +120,20 @@ func TestFinishReasonMapping(t *testing.T) {
 				t.Fatalf("finish_reason = %q, want %q", got, c.expect)
 			}
 		})
+	}
+}
+
+func TestApplyEventLogsSchemaDrift(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+	agg := NewStreamAggregator(logger)
+	// `delta` is typed string in our schema; sending an object should be flagged.
+	_, err := agg.ApplyEvent(SSEEvent{Data: `{"type":"response.output_text.delta","delta":{"unexpected":true}}`})
+	if err == nil {
+		t.Fatal("expected unmarshal error to propagate")
+	}
+	if !strings.Contains(buf.String(), "upstream SSE event failed schema decode") {
+		t.Fatalf("log did not record schema drift: %q", buf.String())
 	}
 }
 
@@ -142,7 +158,7 @@ func TestReadSSE(t *testing.T) {
 }
 
 func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
-	agg := NewStreamAggregator()
+	agg := NewStreamAggregator(nil)
 	events := []string{
 		`{"type":"response.reasoning_summary_text.delta","delta":"thinking"}`,
 		`{"type":"response.reasoning_text.delta","delta":" raw"}`,
