@@ -6,17 +6,20 @@ import (
 )
 
 type ChatCompletionRequest struct {
-	Model             string          `json:"model"`
-	Messages          []ChatMessage   `json:"messages"`
-	Stream            bool            `json:"stream"`
-	Tools             []ChatTool      `json:"tools,omitempty"`
-	ToolChoice        json.RawMessage `json:"tool_choice,omitempty"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
-	Stop              any             `json:"stop,omitempty"`
-	MaxTokens         *int            `json:"max_tokens,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	Model       string          `json:"model"`
+	Messages    []ChatMessage   `json:"messages"`
+	Stream      bool            `json:"stream"`
+	Tools       []ChatTool      `json:"tools,omitempty"`
+	ToolChoice  json.RawMessage `json:"tool_choice,omitempty"`
+	Temperature *float64        `json:"temperature,omitempty"`
+	TopP        *float64        `json:"top_p,omitempty"`
+	Stop        any             `json:"stop,omitempty"`
+	// MaxTokens is parsed for compatibility but never forwarded: the
+	// ChatGPT-account Codex backend rejects max_output_tokens with HTTP 400
+	// "Unsupported parameter", and the upstream Codex CLI never sends it.
+	MaxTokens         *int   `json:"max_tokens,omitempty"`
+	ParallelToolCalls *bool  `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   string `json:"reasoning_effort,omitempty"`
 }
 
 type ChatMessage struct {
@@ -56,6 +59,9 @@ func toResponsesRequest(req ChatCompletionRequest) map[string]any {
 	}
 	if len(req.Tools) > 0 {
 		body["tools"] = toResponsesTools(req.Tools)
+	}
+	if req.ParallelToolCalls != nil {
+		body["parallel_tool_calls"] = *req.ParallelToolCalls
 	}
 	if len(req.ToolChoice) > 0 {
 		if choice := toResponsesToolChoice(req.ToolChoice); choice != nil {

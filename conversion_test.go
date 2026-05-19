@@ -41,8 +41,8 @@ func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 	if body["model"] != "gpt-test" || body["stream"] != true || body["store"] != false {
 		t.Fatalf("unexpected common body fields: %#v", body)
 	}
-	if _, ok := body["parallel_tool_calls"]; ok {
-		t.Fatalf("parallel_tool_calls should be stripped for codex: %#v", body)
+	if got, ok := body["parallel_tool_calls"].(bool); !ok || got {
+		t.Fatalf("parallel_tool_calls = %#v, want false", body["parallel_tool_calls"])
 	}
 	input := body["input"].([]any)
 	if len(input) != 3 {
