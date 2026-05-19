@@ -190,12 +190,15 @@ func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
 	if completion.Choices[0].FinishReason != "tool_calls" {
 		t.Fatalf("finish reason = %q", completion.Choices[0].FinishReason)
 	}
-	usage := completion.Usage.(map[string]any)
-	if usage["prompt_tokens"] != int64(2) || usage["completion_tokens"] != int64(3) || usage["total_tokens"] != int64(5) {
+	usage := completion.Usage
+	if usage == nil || usage.PromptTokens != 2 || usage.CompletionTokens != 3 || usage.TotalTokens != 5 {
 		t.Fatalf("usage = %#v", usage)
 	}
-	if details := usage["completion_tokens_details"].(map[string]any); details["reasoning_tokens"] != int64(2) {
-		t.Fatalf("usage details = %#v", usage)
+	if usage.CompletionTokensDetails == nil || usage.CompletionTokensDetails.ReasoningTokens != 2 {
+		t.Fatalf("usage details = %#v", usage.CompletionTokensDetails)
+	}
+	if usage.PromptTokensDetails == nil || usage.PromptTokensDetails.CachedTokens != 1 {
+		t.Fatalf("prompt details = %#v", usage.PromptTokensDetails)
 	}
 	if chunkCount != 7 {
 		t.Fatalf("chunk count = %d", chunkCount)

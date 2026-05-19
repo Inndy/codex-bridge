@@ -85,24 +85,12 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusMethodNotAllowed, "Method not allowed.", "invalid_request_error")
 		return
 	}
-	var req ChatCompletionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeOpenAIError(w, http.StatusBadRequest, "Invalid JSON body.", "invalid_request_error")
-		return
-	}
-	if req.Model == "" {
-		writeOpenAIError(w, http.StatusBadRequest, "`model` is required.", "invalid_request_error")
-		return
-	}
-	if len(req.Messages) == 0 {
-		writeOpenAIError(w, http.StatusBadRequest, "`messages` must be a non-empty array.", "invalid_request_error")
-		return
-	}
-	if err := validateMessages(req.Messages); err != nil {
+	req, body, err := parseAndValidateChatRequest(r)
+	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
 		return
 	}
-	resp, err := s.responsesWithRetry(r.Context(), toResponsesRequest(req))
+	resp, err := s.responsesWithRetry(r.Context(), body)
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "chat request failed", "request_id", requestID, "model", req.Model, "stream", req.Stream, "duration_ms", time.Since(start).Milliseconds(), "error", err)
 		writeOpenAIError(w, http.StatusBadGateway, err.Error(), "upstream_error")
@@ -110,8 +98,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 	defer drainAndClose(resp)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-		writeOpenAIError(w, resp.StatusCode, upstreamError(resp.StatusCode, body).Error(), "upstream_error")
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		writeOpenAIError(w, resp.StatusCode, upstreamError(resp.StatusCode, respBody).Error(), "upstream_error")
 		return
 	}
 	id := newID("chatcmpl_")
@@ -121,6 +109,24 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.completeChat(w, r, resp, requestID, id, created, req.Model, start)
+}
+
+func parseAndValidateChatRequest(r *http.Request) (ChatCompletionRequest, responsesRequest, error) {
+	var req ChatCompletionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		return req, responsesRequest{}, errors.New("Invalid JSON body.")
+	}
+	if req.Model == "" {
+		return req, responsesRequest{}, errors.New("`model` is required.")
+	}
+	if len(req.Messages) == 0 {
+		return req, responsesRequest{}, errors.New("`messages` must be a non-empty array.")
+	}
+	body, err := toResponsesRequest(req)
+	if err != nil {
+		return req, responsesRequest{}, err
+	}
+	return req, body, nil
 }
 
 func (s *Server) modelsWithRetry(ctx context.Context) ([]string, int, error) {
@@ -134,7 +140,7 @@ func (s *Server) modelsWithRetry(ctx context.Context) ([]string, int, error) {
 	return s.upstream.Models(ctx)
 }
 
-func (s *Server) responsesWithRetry(ctx context.Context, body map[string]any) (*http.Response, error) {
+func (s *Server) responsesWithRetry(ctx context.Context, body responsesRequest) (*http.Response, error) {
 	resp, err := s.upstream.Responses(ctx, body)
 	if err != nil || !isAuthStatus(resp.StatusCode) {
 		return resp, err

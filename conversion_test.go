@@ -13,16 +13,16 @@ func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 		ToolChoice:        rawChoice,
 		ParallelToolCalls: new(false),
 		Messages: []ChatMessage{
-			{Role: "system", Content: "be brief"},
-			{Role: "user", Content: "read config"},
-			{Role: "assistant", Content: "", ToolCalls: []ChatToolCall{{
+			{Role: "system", Content: json.RawMessage(`"be brief"`)},
+			{Role: "user", Content: json.RawMessage(`"read config"`)},
+			{Role: "assistant", Content: json.RawMessage(`""`), ToolCalls: []ChatToolCall{{
 				ID: "call_1",
 				Function: ChatToolFunction{
 					Name:      "read_file",
 					Arguments: `{"path":"config.json"}`,
 				},
 			}}},
-			{Role: "tool", ToolCallID: "call_1", Content: `{"ok":true}`},
+			{Role: "tool", ToolCallID: "call_1", Content: json.RawMessage(`"{\"ok\":true}"`)},
 		},
 		Tools: []ChatTool{{
 			Type: "function",
@@ -34,72 +34,54 @@ func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 		}},
 	}
 
-	body := toResponsesRequest(req)
-	if body["instructions"] != "be brief" {
-		t.Fatalf("instructions = %#v", body["instructions"])
+	body, err := toResponsesRequest(req)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if body["model"] != "gpt-test" || body["stream"] != true || body["store"] != false {
+	if body.Instructions != "be brief" {
+		t.Fatalf("instructions = %q", body.Instructions)
+	}
+	if body.Model != "gpt-test" || body.Stream != true || body.Store != false {
 		t.Fatalf("unexpected common body fields: %#v", body)
 	}
-	if got, ok := body["parallel_tool_calls"].(bool); !ok || got {
-		t.Fatalf("parallel_tool_calls = %#v, want false", body["parallel_tool_calls"])
+	if body.ParallelToolCalls == nil || *body.ParallelToolCalls != false {
+		t.Fatalf("parallel_tool_calls = %#v, want pointer to false", body.ParallelToolCalls)
 	}
-	input := body["input"].([]any)
-	if len(input) != 3 {
-		t.Fatalf("input length = %d", len(input))
+	if len(body.Input) != 3 {
+		t.Fatalf("input length = %d", len(body.Input))
 	}
-	if input[1].(map[string]any)["type"] != "function_call" {
-		t.Fatalf("assistant tool call not converted: %#v", input[1])
+	if _, ok := body.Input[1].(responsesFunctionCallItem); !ok {
+		t.Fatalf("assistant tool call not converted: %#v", body.Input[1])
 	}
-	if input[2].(map[string]any)["type"] != "function_call_output" {
-		t.Fatalf("tool output not converted: %#v", input[2])
+	if _, ok := body.Input[2].(responsesFunctionCallOutputItem); !ok {
+		t.Fatalf("tool output not converted: %#v", body.Input[2])
 	}
-	tools := body["tools"].([]any)
-	if tools[0].(map[string]any)["name"] != "read_file" {
-		t.Fatalf("tools = %#v", tools)
+	if len(body.Tools) == 0 || body.Tools[0].Name != "read_file" {
+		t.Fatalf("tools = %#v", body.Tools)
 	}
-	choice := body["tool_choice"].(map[string]any)
-	if choice["name"] != "read_file" {
-		t.Fatalf("tool choice = %#v", choice)
+	choice, ok := body.ToolChoice.(responsesToolChoiceFunction)
+	if !ok || choice.Name != "read_file" {
+		t.Fatalf("tool choice = %#v", body.ToolChoice)
 	}
 }
 
-func TestValidateMessagesRejectsUnsupportedParts(t *testing.T) {
+// contentText is the single rejection point for unsupported chat content parts
+// (image_url, input_audio, refusal, ...). Test it directly here; the same path
+// is what toResponsesRequest invokes for every message body.
+func TestContentTextRejectsUnsupportedParts(t *testing.T) {
 	cases := []struct {
-		name     string
-		messages []ChatMessage
-		wantErr  bool
+		name    string
+		content json.RawMessage
+		wantErr bool
 	}{
-		{
-			name: "plain string ok",
-			messages: []ChatMessage{
-				{Role: "user", Content: "hello"},
-			},
-		},
-		{
-			name: "text parts ok",
-			messages: []ChatMessage{
-				{Role: "user", Content: []any{map[string]any{"type": "text", "text": "hello"}}},
-			},
-		},
-		{
-			name: "image_url rejected",
-			messages: []ChatMessage{
-				{Role: "user", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "x"}}}},
-			},
-			wantErr: true,
-		},
-		{
-			name: "input_audio rejected",
-			messages: []ChatMessage{
-				{Role: "user", Content: []any{map[string]any{"type": "input_audio"}}},
-			},
-			wantErr: true,
-		},
+		{"plain string ok", json.RawMessage(`"hello"`), false},
+		{"text parts ok", json.RawMessage(`[{"type":"text","text":"hello"}]`), false},
+		{"image_url rejected", json.RawMessage(`[{"type":"image_url","image_url":{"url":"x"}}]`), true},
+		{"input_audio rejected", json.RawMessage(`[{"type":"input_audio"}]`), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			err := validateMessages(c.messages)
+			_, err := contentText(c.content)
 			if (err != nil) != c.wantErr {
 				t.Fatalf("err = %v, wantErr = %v", err, c.wantErr)
 			}
@@ -108,12 +90,45 @@ func TestValidateMessagesRejectsUnsupportedParts(t *testing.T) {
 }
 
 func TestContentTextHandlesArrayTextParts(t *testing.T) {
-	got := contentText([]any{
-		map[string]any{"type": "text", "text": "hello"},
-		map[string]any{"type": "image_url", "image_url": map[string]any{"url": "x"}},
-		map[string]any{"type": "text", "text": " world"},
-	})
+	got, err := contentText(json.RawMessage(`[{"type":"text","text":"hello"},{"type":"text","text":" world"}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
 	if got != "hello world" {
 		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestContentTextRejectsObject(t *testing.T) {
+	if _, err := contentText(json.RawMessage(`{"unexpected":true}`)); err == nil {
+		t.Fatal("expected error for object content")
+	}
+}
+
+func TestToResponsesToolChoiceRejectsMalformed(t *testing.T) {
+	cases := []string{
+		`"any"`,
+		`{"type":"function"}`,
+		`{"type":"function","function":{"name":""}}`,
+		`42`,
+	}
+	for _, c := range cases {
+		if _, err := toResponsesToolChoice(json.RawMessage(c)); err == nil {
+			t.Errorf("expected error for %s", c)
+		}
+	}
+}
+
+func TestToResponsesToolsRejectsNonFunction(t *testing.T) {
+	_, err := toResponsesTools([]ChatTool{{Type: "code_interpreter"}})
+	if err == nil {
+		t.Fatal("expected error for unsupported tool type")
+	}
+}
+
+func TestToResponsesInputRejectsEmptyRole(t *testing.T) {
+	_, err := toResponsesInput([]ChatMessage{{Role: "", Content: json.RawMessage(`"hi"`)}})
+	if err == nil {
+		t.Fatal("expected error for empty role")
 	}
 }

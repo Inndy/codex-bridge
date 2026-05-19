@@ -17,9 +17,55 @@ type ChatCompletionResponse struct {
 	Created           int64        `json:"created"`
 	Model             string       `json:"model"`
 	Choices           []ChatChoice `json:"choices"`
-	Usage             any          `json:"usage,omitempty"`
+	Usage             *Usage       `json:"usage,omitempty"`
 	SystemFingerprint *string      `json:"system_fingerprint"`
 	ServiceTier       *string      `json:"service_tier,omitempty"`
+}
+
+// Usage mirrors the OpenAI Chat Completions usage object. PromptTokensDetails
+// and CompletionTokensDetails are only emitted when at least one sub-field is
+// non-zero so we don't add fields the upstream did not provide.
+type Usage struct {
+	PromptTokens            int64                    `json:"prompt_tokens"`
+	CompletionTokens        int64                    `json:"completion_tokens"`
+	TotalTokens             int64                    `json:"total_tokens"`
+	PromptTokensDetails     *PromptTokensDetails     `json:"prompt_tokens_details,omitempty"`
+	CompletionTokensDetails *CompletionTokensDetails `json:"completion_tokens_details,omitempty"`
+}
+
+type PromptTokensDetails struct {
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	AudioTokens  int64 `json:"audio_tokens,omitempty"`
+}
+
+type CompletionTokensDetails struct {
+	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens              int64 `json:"audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
+}
+
+// codexUsage is the upstream Codex shape received on response.completed events.
+// We decode into this typed struct so the compiler verifies field names and
+// the JSON decoder normalises numeric types — no runtime any-juggling required.
+type codexUsage struct {
+	InputTokens         int64                     `json:"input_tokens"`
+	OutputTokens        int64                     `json:"output_tokens"`
+	TotalTokens         int64                     `json:"total_tokens"`
+	InputTokensDetails  *codexInputTokensDetails  `json:"input_tokens_details,omitempty"`
+	OutputTokensDetails *codexOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+type codexInputTokensDetails struct {
+	CachedTokens int64 `json:"cached_tokens,omitempty"`
+	AudioTokens  int64 `json:"audio_tokens,omitempty"`
+}
+
+type codexOutputTokensDetails struct {
+	ReasoningTokens          int64 `json:"reasoning_tokens,omitempty"`
+	AudioTokens              int64 `json:"audio_tokens,omitempty"`
+	AcceptedPredictionTokens int64 `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int64 `json:"rejected_prediction_tokens,omitempty"`
 }
 
 type ChatChoice struct {
@@ -51,7 +97,7 @@ type StreamAggregator struct {
 	text              string
 	reasoning         string
 	finishReason      string
-	usage             any
+	usage             *Usage
 	toolOrder         []string
 	toolCalls         map[string]*OpenAIToolCallOut
 	activeToolItemID  map[string]string
@@ -333,43 +379,44 @@ func finishReasonFromResponse(response *completedResponse) string {
 	}
 }
 
-func toOpenAIUsage(raw any) any {
-	usage, ok := raw.(map[string]any)
-	if !ok {
-		return raw
+func toOpenAIUsage(raw any) *Usage {
+	if raw == nil {
+		return nil
 	}
-	result := map[string]any{
-		"prompt_tokens":     numberOrZero(usage["input_tokens"]),
-		"completion_tokens": numberOrZero(usage["output_tokens"]),
-		"total_tokens":      numberOrZero(usage["total_tokens"]),
+	encoded, err := json.Marshal(raw)
+	if err != nil {
+		return nil
 	}
-	if inputDetails, ok := usage["input_tokens_details"].(map[string]any); ok {
-		if cached := numberOrZero(inputDetails["cached_tokens"]); cached != 0 {
-			result["prompt_tokens_details"] = map[string]any{"cached_tokens": cached}
+	var codex codexUsage
+	if err := json.Unmarshal(encoded, &codex); err != nil {
+		return nil
+	}
+	u := &Usage{
+		PromptTokens:     codex.InputTokens,
+		CompletionTokens: codex.OutputTokens,
+		TotalTokens:      codex.TotalTokens,
+	}
+	if codex.InputTokensDetails != nil {
+		details := PromptTokensDetails{
+			CachedTokens: codex.InputTokensDetails.CachedTokens,
+			AudioTokens:  codex.InputTokensDetails.AudioTokens,
+		}
+		if details != (PromptTokensDetails{}) {
+			u.PromptTokensDetails = &details
 		}
 	}
-	if outputDetails, ok := usage["output_tokens_details"].(map[string]any); ok {
-		if reasoning := numberOrZero(outputDetails["reasoning_tokens"]); reasoning != 0 {
-			result["completion_tokens_details"] = map[string]any{"reasoning_tokens": reasoning}
+	if codex.OutputTokensDetails != nil {
+		details := CompletionTokensDetails{
+			ReasoningTokens:          codex.OutputTokensDetails.ReasoningTokens,
+			AudioTokens:              codex.OutputTokensDetails.AudioTokens,
+			AcceptedPredictionTokens: codex.OutputTokensDetails.AcceptedPredictionTokens,
+			RejectedPredictionTokens: codex.OutputTokensDetails.RejectedPredictionTokens,
+		}
+		if details != (CompletionTokensDetails{}) {
+			u.CompletionTokensDetails = &details
 		}
 	}
-	return result
-}
-
-func numberOrZero(value any) int64 {
-	switch v := value.(type) {
-	case float64:
-		return int64(v)
-	case int64:
-		return v
-	case int:
-		return int64(v)
-	case json.Number:
-		n, _ := v.Int64()
-		return n
-	default:
-		return 0
-	}
+	return u
 }
 
 func (a *StreamAggregator) callIDFor(ev streamEvent) string {

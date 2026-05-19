@@ -79,7 +79,7 @@ func (c *UpstreamClient) Models(ctx context.Context) ([]string, int, error) {
 	return models, resp.StatusCode, nil
 }
 
-func (c *UpstreamClient) Responses(ctx context.Context, body map[string]any) (*http.Response, error) {
+func (c *UpstreamClient) Responses(ctx context.Context, body responsesRequest) (*http.Response, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
 		return nil, err
