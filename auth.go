@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -28,10 +29,11 @@ type HookConfig struct {
 }
 
 type AuthManager struct {
-	authPath string
-	hook     HookConfig
-	logger   *slog.Logger
-	auth     atomic.Pointer[Auth]
+	authPath  string
+	hook      HookConfig
+	logger    *slog.Logger
+	auth      atomic.Pointer[Auth]
+	refreshMu sync.Mutex
 }
 
 func NewAuthManager(authPath string, hook HookConfig, logger *slog.Logger) *AuthManager {
@@ -60,7 +62,13 @@ func (m *AuthManager) HandleAuthFailure(ctx context.Context) error {
 	if m.hook.Command == "" {
 		return errors.New("upstream auth failed and no auth failure hook is configured")
 	}
-	if err := runAuthHook(ctx, m.hook, m.logger); err != nil {
+	seen := m.auth.Load()
+	m.refreshMu.Lock()
+	defer m.refreshMu.Unlock()
+	if m.auth.Load() != seen {
+		return nil
+	}
+	if err := runAuthHook(ctx, m.hook, m.logger, seen); err != nil {
 		return err
 	}
 	return m.Load(ctx)
@@ -153,7 +161,7 @@ func deriveAccountID(idToken string) string {
 	return claims.OpenAIAuth.ChatGPTAccountID
 }
 
-func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger) error {
+func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger, failing *Auth) error {
 	timeout := hook.Timeout
 	if timeout <= 0 {
 		timeout = time.Minute
@@ -163,6 +171,7 @@ func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger) erro
 
 	logger.InfoContext(ctx, "running auth failure hook", "command", hook.Command, "timeout", timeout.String())
 	cmd := exec.CommandContext(hookCtx, hook.Command, hook.Args...)
+	cmd.Env = append(os.Environ(), authHookEnv(failing)...)
 	output, err := cmd.CombinedOutput()
 	if hookCtx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("auth failure hook timed out after %s", timeout)
@@ -172,4 +181,14 @@ func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger) erro
 	}
 	logger.InfoContext(ctx, "auth failure hook completed")
 	return nil
+}
+
+func authHookEnv(failing *Auth) []string {
+	if failing == nil {
+		return nil
+	}
+	return []string{
+		"CODEX_BRIDGE_AUTH_PATH=" + failing.SourcePath,
+		"CODEX_BRIDGE_ACCOUNT_ID=" + failing.AccountID,
+	}
 }
