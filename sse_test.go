@@ -5,6 +5,67 @@ import (
 	"testing"
 )
 
+func TestStreamAggregatorSyntheticIDsAreDistinct(t *testing.T) {
+	agg := NewStreamAggregator()
+	events := []string{
+		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"a"}`,
+		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"b"}`,
+		`{"type":"response.function_call_arguments.delta","output_index":1,"delta":"c"}`,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	}
+	for _, data := range events {
+		if _, err := agg.ApplyEvent(SSEEvent{Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	calls := completion.Choices[0].Message.ToolCalls
+	if len(calls) != 2 {
+		t.Fatalf("tool calls = %#v", calls)
+	}
+	for _, call := range calls {
+		if !strings.HasPrefix(call.ID, "synth_call_") {
+			t.Fatalf("synthetic id missing prefix: %q", call.ID)
+		}
+	}
+	if calls[0].ID == calls[1].ID {
+		t.Fatalf("synthetic ids collided: %q == %q", calls[0].ID, calls[1].ID)
+	}
+	if calls[0].Function.Arguments != "ab" || calls[1].Function.Arguments != "c" {
+		t.Fatalf("arguments = %#v / %#v", calls[0].Function.Arguments, calls[1].Function.Arguments)
+	}
+}
+
+func TestSyntheticAndRealCallIDsDoNotCollide(t *testing.T) {
+	agg := NewStreamAggregator()
+	events := []string{
+		`{"type":"response.function_call_arguments.delta","output_index":0,"delta":"x"}`,
+		`{"type":"response.output_item.added","item":{"id":"item_1","type":"function_call","call_id":"call_1","name":"read_file","arguments":""}}`,
+		`{"type":"response.function_call_arguments.delta","call_id":"call_1","delta":"y"}`,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	}
+	for _, data := range events {
+		if _, err := agg.ApplyEvent(SSEEvent{Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	calls := completion.Choices[0].Message.ToolCalls
+	if len(calls) != 2 {
+		t.Fatalf("tool calls = %#v", calls)
+	}
+	ids := map[string]bool{}
+	for _, call := range calls {
+		ids[call.ID] = true
+	}
+	if !ids["call_1"] {
+		t.Fatalf("real call_1 missing: %#v", calls)
+	}
+	if len(ids) != 2 {
+		t.Fatalf("expected distinct ids, got %#v", ids)
+	}
+}
+
 func TestReadSSE(t *testing.T) {
 	var events []SSEEvent
 	err := readSSE(strings.NewReader("event: message\ndata: {\"x\":1}\n\ndata: [DONE]\n\n"), func(event SSEEvent) error {

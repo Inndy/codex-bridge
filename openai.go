@@ -50,13 +50,22 @@ type StreamAggregator struct {
 	toolOrder         []string
 	toolCalls         map[string]*OpenAIToolCallOut
 	activeToolItemID  map[string]string
+	syntheticByOutput map[int]string
 	nextSyntheticTool int
 }
 
+// syntheticCallIDPrefix is the prefix used for fabricated tool-call IDs when
+// the upstream Codex stream omits a real call_id. Using a distinct prefix from
+// upstream's `call_...` namespace means the aggregator can never collapse a
+// synthetic call onto a real one, and a client echoing it back as
+// tool_call_id surfaces as an upstream rejection instead of silent corruption.
+const syntheticCallIDPrefix = "synth_call_"
+
 func NewStreamAggregator() *StreamAggregator {
 	return &StreamAggregator{
-		toolCalls:        map[string]*OpenAIToolCallOut{},
-		activeToolItemID: map[string]string{},
+		toolCalls:         map[string]*OpenAIToolCallOut{},
+		activeToolItemID:  map[string]string{},
+		syntheticByOutput: map[int]string{},
 	}
 }
 
@@ -282,12 +291,17 @@ func (a *StreamAggregator) callIDForRaw(raw map[string]any) string {
 		return itemID
 	}
 	if outputIndex, ok := raw["output_index"].(float64); ok {
-		key := "call_" + strconv.Itoa(int(outputIndex))
-		a.ensureToolCall(key, "", "")
+		idx := int(outputIndex)
+		if existing := a.syntheticByOutput[idx]; existing != "" {
+			return existing
+		}
+		a.nextSyntheticTool++
+		key := syntheticCallIDPrefix + strconv.Itoa(a.nextSyntheticTool)
+		a.syntheticByOutput[idx] = key
 		return key
 	}
 	a.nextSyntheticTool++
-	return "call_" + strconv.Itoa(a.nextSyntheticTool)
+	return syntheticCallIDPrefix + strconv.Itoa(a.nextSyntheticTool)
 }
 
 func (a *StreamAggregator) ensureToolCall(callID, name, args string) {
