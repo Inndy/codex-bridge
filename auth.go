@@ -172,12 +172,16 @@ func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger, fail
 	logger.InfoContext(ctx, "running auth failure hook", "command", hook.Command, "timeout", timeout.String())
 	cmd := exec.CommandContext(hookCtx, hook.Command, hook.Args...)
 	cmd.Env = append(os.Environ(), authHookEnv(failing)...)
-	output, err := cmd.CombinedOutput()
+	// Hook output is discarded: a refresh command may print tokens
+	// (e.g. `codex login --verbose`), and we forward errors through structured
+	// logs and HTTP responses where any captured bytes would leak. Operators
+	// debugging a broken hook should run it directly outside this process.
+	err := cmd.Run()
 	if hookCtx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("auth failure hook timed out after %s", timeout)
 	}
 	if err != nil {
-		return fmt.Errorf("auth failure hook failed: %w: %s", err, strings.TrimSpace(string(output)))
+		return fmt.Errorf("auth failure hook failed: %w", err)
 	}
 	logger.InfoContext(ctx, "auth failure hook completed")
 	return nil
