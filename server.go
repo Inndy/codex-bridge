@@ -98,6 +98,10 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "`messages` must be a non-empty array.", "invalid_request_error")
 		return
 	}
+	if err := validateMessages(req.Messages); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, err.Error(), "invalid_request_error")
+		return
+	}
 	resp, err := s.responsesWithRetry(r.Context(), toResponsesRequest(req))
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "chat request failed", "request_id", requestID, "model", req.Model, "stream", req.Stream, "duration_ms", time.Since(start).Milliseconds(), "error", err)

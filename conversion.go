@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 )
 
@@ -45,6 +46,29 @@ type ChatToolFunction struct {
 type ChatTool struct {
 	Type     string           `json:"type"`
 	Function ChatToolFunction `json:"function"`
+}
+
+// validateMessages returns an error if any message carries a content part
+// the bridge cannot losslessly forward (image_url, input_audio, refusal, etc.).
+// Text parts and plain-string content are accepted.
+func validateMessages(messages []ChatMessage) error {
+	for i, msg := range messages {
+		parts, ok := msg.Content.([]any)
+		if !ok {
+			continue
+		}
+		for _, item := range parts {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			partType, _ := m["type"].(string)
+			if partType != "" && partType != "text" {
+				return fmt.Errorf("messages[%d].content: unsupported content part type %q", i, partType)
+			}
+		}
+	}
+	return nil
 }
 
 func toResponsesRequest(req ChatCompletionRequest) map[string]any {

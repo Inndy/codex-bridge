@@ -64,6 +64,49 @@ func TestToResponsesRequestConvertsMessagesAndTools(t *testing.T) {
 	}
 }
 
+func TestValidateMessagesRejectsUnsupportedParts(t *testing.T) {
+	cases := []struct {
+		name     string
+		messages []ChatMessage
+		wantErr  bool
+	}{
+		{
+			name: "plain string ok",
+			messages: []ChatMessage{
+				{Role: "user", Content: "hello"},
+			},
+		},
+		{
+			name: "text parts ok",
+			messages: []ChatMessage{
+				{Role: "user", Content: []any{map[string]any{"type": "text", "text": "hello"}}},
+			},
+		},
+		{
+			name: "image_url rejected",
+			messages: []ChatMessage{
+				{Role: "user", Content: []any{map[string]any{"type": "image_url", "image_url": map[string]any{"url": "x"}}}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "input_audio rejected",
+			messages: []ChatMessage{
+				{Role: "user", Content: []any{map[string]any{"type": "input_audio"}}},
+			},
+			wantErr: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateMessages(c.messages)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, c.wantErr)
+			}
+		})
+	}
+}
+
 func TestContentTextHandlesArrayTextParts(t *testing.T) {
 	got := contentText([]any{
 		map[string]any{"type": "text", "text": "hello"},
