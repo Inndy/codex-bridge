@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -98,6 +99,9 @@ func (c *UpstreamClient) newRequest(ctx context.Context, method, path string, bo
 		return nil, err
 	}
 	auth := c.auth.Current()
+	if auth == nil {
+		return nil, errors.New("codex auth not loaded")
+	}
 	version := c.codexVersion
 	if version == "" {
 		version = "0.125.0"

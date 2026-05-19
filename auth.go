@@ -11,7 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -31,9 +31,7 @@ type AuthManager struct {
 	authPath string
 	hook     HookConfig
 	logger   *slog.Logger
-
-	mu   sync.RWMutex
-	auth Auth
+	auth     atomic.Pointer[Auth]
 }
 
 func NewAuthManager(authPath string, hook HookConfig, logger *slog.Logger) *AuthManager {
@@ -49,17 +47,13 @@ func (m *AuthManager) Load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	m.mu.Lock()
-	m.auth = auth
-	m.mu.Unlock()
+	m.auth.Store(auth)
 	m.logger.InfoContext(ctx, "loaded codex auth", "path", auth.SourcePath)
 	return nil
 }
 
-func (m *AuthManager) Current() Auth {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.auth
+func (m *AuthManager) Current() *Auth {
+	return m.auth.Load()
 }
 
 func (m *AuthManager) HandleAuthFailure(ctx context.Context) error {
@@ -72,10 +66,10 @@ func (m *AuthManager) HandleAuthFailure(ctx context.Context) error {
 	return m.Load(ctx)
 }
 
-func LoadAuth(authPath string) (Auth, error) {
+func LoadAuth(authPath string) (*Auth, error) {
 	candidates := authCandidates(authPath)
 	if len(candidates) == 0 {
-		return Auth{}, errors.New("no codex auth.json candidates found")
+		return nil, errors.New("no codex auth.json candidates found")
 	}
 	var attempted []string
 	for _, candidate := range candidates {
@@ -85,7 +79,7 @@ func LoadAuth(authPath string) (Auth, error) {
 		}
 		attempted = append(attempted, candidate)
 	}
-	return Auth{}, fmt.Errorf("codex OAuth tokens not found in candidates: %s", strings.Join(attempted, ", "))
+	return nil, fmt.Errorf("codex OAuth tokens not found in candidates: %s", strings.Join(attempted, ", "))
 }
 
 func authCandidates(authPath string) []string {
@@ -110,26 +104,26 @@ type codexAuthFile struct {
 	} `json:"tokens"`
 }
 
-func loadAuthFile(path string) (Auth, error) {
+func loadAuthFile(path string) (*Auth, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return Auth{}, err
+		return nil, err
 	}
 	var file codexAuthFile
 	if err := json.Unmarshal(data, &file); err != nil {
-		return Auth{}, err
+		return nil, err
 	}
 	accountID := file.Tokens.AccountID
 	if accountID == "" {
 		accountID = deriveAccountID(file.Tokens.IDToken)
 	}
 	if file.Tokens.AccessToken == "" {
-		return Auth{}, errors.New("tokens.access_token missing")
+		return nil, errors.New("tokens.access_token missing")
 	}
 	if accountID == "" {
-		return Auth{}, errors.New("tokens.account_id missing and could not be derived from id_token")
+		return nil, errors.New("tokens.account_id missing and could not be derived from id_token")
 	}
-	return Auth{
+	return &Auth{
 		AccessToken: file.Tokens.AccessToken,
 		AccountID:   accountID,
 		SourcePath:  path,
