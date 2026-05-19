@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -197,16 +198,26 @@ func (a *StreamAggregator) applyMessageItem(item map[string]any) {
 		if !ok {
 			return
 		}
+		// Streaming output_text deltas accumulate into a.text as they arrive.
+		// When the terminal response.completed event later replays the full
+		// message item, we keep the delta-accumulated text rather than
+		// replacing it: stream order is authoritative, and duplicating both
+		// would emit the body twice. Only fall back to the final message when
+		// no deltas were seen.
+		if a.text != "" {
+			return
+		}
+		var b strings.Builder
 		for _, part := range content {
 			m, ok := part.(map[string]any)
 			if !ok {
 				continue
 			}
-			text, _ := m["text"].(string)
-			if text != "" && a.text == "" {
-				a.text = text
+			if text, _ := m["text"].(string); text != "" {
+				b.WriteString(text)
 			}
 		}
+		a.text = b.String()
 	case "reasoning":
 		summary, ok := item["summary"].([]any)
 		if !ok {

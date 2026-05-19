@@ -66,6 +66,35 @@ func TestSyntheticAndRealCallIDsDoNotCollide(t *testing.T) {
 	}
 }
 
+func TestApplyMessageItemPrefersDeltaAccumulatedText(t *testing.T) {
+	agg := NewStreamAggregator()
+	events := []string{
+		`{"type":"response.output_text.delta","delta":"streamed"}`,
+		`{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"replayed"}]}]}}`,
+	}
+	for _, data := range events {
+		if _, err := agg.ApplyEvent(SSEEvent{Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	if got := *completion.Choices[0].Message.Content; got != "streamed" {
+		t.Fatalf("content = %q, want delta-accumulated value", got)
+	}
+}
+
+func TestApplyMessageItemConcatenatesPartsWhenNoDeltas(t *testing.T) {
+	agg := NewStreamAggregator()
+	event := `{"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"hello "},{"type":"output_text","text":"world"}]}]}}`
+	if _, err := agg.ApplyEvent(SSEEvent{Data: event}); err != nil {
+		t.Fatal(err)
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	if got := *completion.Choices[0].Message.Content; got != "hello world" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
 func TestFinishReasonMapping(t *testing.T) {
 	cases := []struct {
 		name   string
