@@ -239,6 +239,33 @@ func (a *StreamAggregator) applyCompletedResponse(response map[string]any) {
 			}
 		}
 	}
+	if finish := finishReasonFromResponse(response); finish != "" {
+		a.finishReason = finish
+	}
+}
+
+// finishReasonFromResponse maps a Codex/Responses-API terminal status onto an
+// OpenAI Chat Completions finish_reason. "completed" returns the empty string
+// so the caller's tool_calls-vs-stop heuristic still applies.
+func finishReasonFromResponse(response map[string]any) string {
+	status, _ := response["status"].(string)
+	switch status {
+	case "incomplete":
+		details, _ := response["incomplete_details"].(map[string]any)
+		reason, _ := details["reason"].(string)
+		switch reason {
+		case "content_filter":
+			return "content_filter"
+		case "max_output_tokens", "":
+			return "length"
+		default:
+			return "length"
+		}
+	case "failed", "cancelled":
+		return "stop"
+	default:
+		return ""
+	}
 }
 
 func toOpenAIUsage(raw any) any {

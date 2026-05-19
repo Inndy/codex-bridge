@@ -66,6 +66,32 @@ func TestSyntheticAndRealCallIDsDoNotCollide(t *testing.T) {
 	}
 }
 
+func TestFinishReasonMapping(t *testing.T) {
+	cases := []struct {
+		name   string
+		event  string
+		expect string
+	}{
+		{"completed_text_only", `{"type":"response.completed","response":{"status":"completed"}}`, "stop"},
+		{"incomplete_length", `{"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"}}}`, "length"},
+		{"incomplete_filter", `{"type":"response.completed","response":{"status":"incomplete","incomplete_details":{"reason":"content_filter"}}}`, "content_filter"},
+		{"incomplete_unknown_reason", `{"type":"response.completed","response":{"status":"incomplete"}}`, "length"},
+		{"cancelled", `{"type":"response.completed","response":{"status":"cancelled"}}`, "stop"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			agg := NewStreamAggregator()
+			if _, err := agg.ApplyEvent(SSEEvent{Data: c.event}); err != nil {
+				t.Fatal(err)
+			}
+			completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+			if got := completion.Choices[0].FinishReason; got != c.expect {
+				t.Fatalf("finish_reason = %q, want %q", got, c.expect)
+			}
+		})
+	}
+}
+
 func TestReadSSE(t *testing.T) {
 	var events []SSEEvent
 	err := readSSE(strings.NewReader("event: message\ndata: {\"x\":1}\n\ndata: [DONE]\n\n"), func(event SSEEvent) error {
