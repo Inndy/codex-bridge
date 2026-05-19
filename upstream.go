@@ -102,15 +102,11 @@ func (c *UpstreamClient) newRequest(ctx context.Context, method, path string, bo
 	if auth == nil {
 		return nil, errors.New("codex auth not loaded")
 	}
-	version := c.codexVersion
-	if version == "" {
-		version = "0.125.0"
-	}
 	req.Header.Set("Authorization", "Bearer "+auth.AccessToken)
 	req.Header.Set("chatgpt-account-id", auth.AccountID)
 	req.Header.Set("originator", "codex_cli_rs")
-	req.Header.Set("version", version)
-	req.Header.Set("User-Agent", "codex_cli_rs/"+version+" ("+runtime.GOOS+"; "+runtime.GOARCH+")")
+	req.Header.Set("version", c.codexVersion)
+	req.Header.Set("User-Agent", "codex_cli_rs/"+c.codexVersion+" ("+runtime.GOOS+"; "+runtime.GOARCH+")")
 	return req, nil
 }
 

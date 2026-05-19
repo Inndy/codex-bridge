@@ -151,13 +151,13 @@ func (a *StreamAggregator) ApplyEvent(event SSEEvent) ([]map[string]any, error) 
 		}
 	case "response.output_item.added":
 		if ev.Item != nil {
-			if delta := a.applyFunctionItem(ev.Item, true); delta != nil {
+			if delta := a.startFunctionItem(ev.Item); delta != nil {
 				chunks = append(chunks, map[string]any{"tool_calls": []any{delta}})
 			}
 		}
 	case "response.output_item.done":
 		if ev.Item != nil {
-			a.applyFunctionItem(ev.Item, false)
+			a.finalizeFunctionItem(ev.Item)
 			a.applyMessageItem(ev.Item)
 		}
 	case "response.completed":
@@ -211,25 +211,56 @@ func (a *StreamAggregator) Completion(id, model string, created int64) ChatCompl
 	}
 }
 
-func (a *StreamAggregator) applyFunctionItem(item *responseItem, emitStart bool) map[string]any {
-	if item.Type != "function_call" {
+// startFunctionItem registers a tool call announced by response.output_item.added
+// and returns the leading delta the client expects. Name and any preliminary
+// arguments are recorded but may still be overridden by the later
+// response.output_item.done event via finalizeFunctionItem.
+func (a *StreamAggregator) startFunctionItem(item *responseItem) map[string]any {
+	callID, name, args, ok := a.parseFunctionItem(item)
+	if !ok {
 		return nil
 	}
-	callID := item.CallID
+	a.ensureToolCall(callID, name, args)
+	return a.toolDelta(callID, name, "")
+}
+
+// finalizeFunctionItem reconciles a tool call against the canonical fields in a
+// response.output_item.done or response.completed payload. Any non-empty name
+// or arguments from the done event overwrite values accumulated from
+// response.function_call_arguments.delta — the done payload is authoritative.
+func (a *StreamAggregator) finalizeFunctionItem(item *responseItem) {
+	callID, name, args, ok := a.parseFunctionItem(item)
+	if !ok {
+		return
+	}
+	a.ensureToolCall(callID, name, args)
+	entry := a.toolCalls[callID]
+	if entry == nil {
+		return
+	}
+	if name != "" {
+		entry.Function.Name = name
+	}
+	if args != "" {
+		entry.Function.Arguments = args
+	}
+}
+
+func (a *StreamAggregator) parseFunctionItem(item *responseItem) (callID, name, args string, ok bool) {
+	if item.Type != "function_call" {
+		return "", "", "", false
+	}
+	callID = item.CallID
 	if callID == "" {
 		callID = item.ID
 	}
 	if callID == "" {
-		return nil
+		return "", "", "", false
 	}
 	if item.ID != "" {
 		a.activeToolItemID[item.ID] = callID
 	}
-	a.ensureToolCall(callID, item.Name, item.Arguments)
-	if !emitStart {
-		return nil
-	}
-	return a.toolDelta(callID, item.Name, "")
+	return callID, item.Name, item.Arguments, true
 }
 
 func (a *StreamAggregator) applyMessageItem(item *responseItem) {
@@ -271,7 +302,7 @@ func (a *StreamAggregator) applyCompletedResponse(response *completedResponse) {
 	}
 	for i := range response.Output {
 		item := &response.Output[i]
-		a.applyFunctionItem(item, false)
+		a.finalizeFunctionItem(item)
 		a.applyMessageItem(item)
 	}
 	if finish := finishReasonFromResponse(response); finish != "" {
