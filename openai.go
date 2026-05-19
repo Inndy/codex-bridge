@@ -12,12 +12,14 @@ import (
 )
 
 type ChatCompletionResponse struct {
-	ID      string       `json:"id"`
-	Object  string       `json:"object"`
-	Created int64        `json:"created"`
-	Model   string       `json:"model"`
-	Choices []ChatChoice `json:"choices"`
-	Usage   any          `json:"usage,omitempty"`
+	ID                string       `json:"id"`
+	Object            string       `json:"object"`
+	Created           int64        `json:"created"`
+	Model             string       `json:"model"`
+	Choices           []ChatChoice `json:"choices"`
+	Usage             any          `json:"usage,omitempty"`
+	SystemFingerprint *string      `json:"system_fingerprint"`
+	ServiceTier       *string      `json:"service_tier,omitempty"`
 }
 
 type ChatChoice struct {
@@ -168,6 +170,10 @@ func (a *StreamAggregator) ApplyEvent(event SSEEvent) ([]map[string]any, error) 
 	return chunks, nil
 }
 
+// Completion always returns a ChatCompletionResponse whose Choices slice has
+// exactly one element. The OpenAI wire format keeps Choices as a list, but the
+// proxy never produces an n>1 completion — callers may index Choices[0]
+// without a length check.
 func (a *StreamAggregator) Completion(id, model string, created int64) ChatCompletionResponse {
 	var content *string
 	if a.text != "" || len(a.toolOrder) == 0 {
@@ -429,9 +435,14 @@ func streamChunk(id string, created int64, model string, delta map[string]any, f
 			"delta":         delta,
 			"finish_reason": finishReason,
 		}},
+		"system_fingerprint": nil,
 	}
 }
 
+// drainAndClose discards up to a small bounded amount of the response body so
+// the underlying TCP connection can be reused for keep-alive, then closes it.
+// The 4 KiB cap is a backstop against streaming or oversized error bodies — we
+// never need the bytes here, only enough drain to satisfy net/http.
 func drainAndClose(resp *http.Response) {
 	if resp == nil || resp.Body == nil {
 		return

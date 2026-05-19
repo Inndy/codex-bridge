@@ -2,8 +2,8 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"strings"
 )
@@ -65,6 +65,6 @@ func writeSSE(w io.Writer, data any) error {
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(w, bytes.NewReader(append([]byte("data: "), append(encoded, '\n', '\n')...)))
+	_, err = fmt.Fprintf(w, "data: %s\n\n", encoded)
 	return err
 }
