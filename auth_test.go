@@ -52,31 +52,27 @@ func TestLoadAuthRejectsAPIKeyOnly(t *testing.T) {
 	}
 }
 
-func TestAuthCandidatesOrderAndDedup(t *testing.T) {
+func TestAuthCandidatesOrder(t *testing.T) {
 	home := t.TempDir()
 	codexHome := filepath.Join(home, "codex-home")
-	mustMkdir(t, filepath.Join(home, ".codex"))
-	mustMkdir(t, filepath.Join(home, ".codex-alt"))
-	mustMkdir(t, codexHome)
-	for _, path := range []string{
-		filepath.Join(codexHome, "auth.json"),
-		filepath.Join(home, ".codex", "auth.json"),
-		filepath.Join(home, ".codex-alt", "auth.json"),
-	} {
-		writeJSONFile(t, path, map[string]any{})
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", codexHome)
+
+	if got := authCandidates("/explicit/auth.json"); !sameStrings(got, []string{"/explicit/auth.json"}) {
+		t.Fatalf("explicit path candidates = %#v", got)
 	}
 
-	candidates, err := authCandidatesWithHome("", home, codexHome)
-	if err != nil {
-		t.Fatal(err)
-	}
 	want := []string{
 		filepath.Join(codexHome, "auth.json"),
 		filepath.Join(home, ".codex", "auth.json"),
-		filepath.Join(home, ".codex-alt", "auth.json"),
 	}
-	if !sameStrings(candidates, want) {
-		t.Fatalf("candidates = %#v, want %#v", candidates, want)
+	if got := authCandidates(""); !sameStrings(got, want) {
+		t.Fatalf("candidates = %#v, want %#v", got, want)
+	}
+
+	t.Setenv("CODEX_HOME", "")
+	if got := authCandidates(""); !sameStrings(got, []string{filepath.Join(home, ".codex", "auth.json")}) {
+		t.Fatalf("candidates without CODEX_HOME = %#v", got)
 	}
 }
 
@@ -119,13 +115,6 @@ func writeJSONFile(t *testing.T, path string, value any) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func mustMkdir(t *testing.T, path string) {
-	t.Helper()
-	if err := os.MkdirAll(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 }

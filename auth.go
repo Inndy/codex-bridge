@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -74,67 +73,33 @@ func (m *AuthManager) HandleAuthFailure(ctx context.Context) error {
 }
 
 func LoadAuth(authPath string) (Auth, error) {
-	candidates, err := authCandidates(authPath)
-	if err != nil {
-		return Auth{}, err
+	candidates := authCandidates(authPath)
+	if len(candidates) == 0 {
+		return Auth{}, errors.New("no codex auth.json candidates found")
 	}
+	var attempted []string
 	for _, candidate := range candidates {
 		auth, err := loadAuthFile(candidate)
 		if err == nil {
 			return auth, nil
 		}
+		attempted = append(attempted, candidate)
 	}
-	if len(candidates) == 0 {
-		return Auth{}, errors.New("no codex auth.json candidates found")
-	}
-	return Auth{}, fmt.Errorf("codex OAuth tokens not found in candidates: %s", strings.Join(candidates, ", "))
+	return Auth{}, fmt.Errorf("codex OAuth tokens not found in candidates: %s", strings.Join(attempted, ", "))
 }
 
-func authCandidates(authPath string) ([]string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
-	}
-	return authCandidatesWithHome(authPath, home, os.Getenv("CODEX_HOME"))
-}
-
-func authCandidatesWithHome(authPath, home, codexHome string) ([]string, error) {
-	var candidates []string
+func authCandidates(authPath string) []string {
 	if authPath != "" {
-		candidates = append(candidates, authPath)
-	} else {
-		if codexHome != "" {
-			candidates = append(candidates, filepath.Join(codexHome, "auth.json"))
-		}
+		return []string{authPath}
+	}
+	var candidates []string
+	if codexHome := os.Getenv("CODEX_HOME"); codexHome != "" {
+		candidates = append(candidates, filepath.Join(codexHome, "auth.json"))
+	}
+	if home, err := os.UserHomeDir(); err == nil {
 		candidates = append(candidates, filepath.Join(home, ".codex", "auth.json"))
-		matches, err := filepath.Glob(filepath.Join(home, ".codex*", "auth.json"))
-		if err != nil {
-			return nil, err
-		}
-		sort.Strings(matches)
-		candidates = append(candidates, matches...)
 	}
-	return uniqueExistingPaths(candidates), nil
-}
-
-func uniqueExistingPaths(paths []string) []string {
-	seen := make(map[string]struct{}, len(paths))
-	result := make([]string, 0, len(paths))
-	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		clean := filepath.Clean(p)
-		if _, ok := seen[clean]; ok {
-			continue
-		}
-		if _, err := os.Stat(clean); err != nil {
-			continue
-		}
-		seen[clean] = struct{}{}
-		result = append(result, clean)
-	}
-	return result
+	return candidates
 }
 
 type codexAuthFile struct {
@@ -154,19 +119,18 @@ func loadAuthFile(path string) (Auth, error) {
 	if err := json.Unmarshal(data, &file); err != nil {
 		return Auth{}, err
 	}
-	accessToken := strings.TrimSpace(file.Tokens.AccessToken)
-	accountID := strings.TrimSpace(file.Tokens.AccountID)
+	accountID := file.Tokens.AccountID
 	if accountID == "" {
 		accountID = deriveAccountID(file.Tokens.IDToken)
 	}
-	if accessToken == "" {
+	if file.Tokens.AccessToken == "" {
 		return Auth{}, errors.New("tokens.access_token missing")
 	}
 	if accountID == "" {
 		return Auth{}, errors.New("tokens.account_id missing and could not be derived from id_token")
 	}
 	return Auth{
-		AccessToken: accessToken,
+		AccessToken: file.Tokens.AccessToken,
 		AccountID:   accountID,
 		SourcePath:  path,
 	}, nil
