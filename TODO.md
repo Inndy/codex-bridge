@@ -2,74 +2,70 @@
 
 Tracked OpenAI Chat Completions compatibility gaps. Details + live probe
 evidence in [KNOWN_INCOMPATIBILITIES.md](KNOWN_INCOMPATIBILITIES.md).
-Probed against `gpt-5.4-mini`, 2026-05-21.
+Probed against `gpt-5.4-mini` baseline `openai/gpt-4o-mini` (OpenRouter),
+2026-05-21.
 
-## Bugs — forwarded params the Codex backend rejects (cause hard 400)
+## Resolved
 
-- [ ] **Drop `temperature` before forwarding.** Codex upstream → 400
-  `Unsupported parameter: temperature`. Currently set in `toResponsesRequest`
-  (conversion.go). Parse-and-drop like `max_tokens`.
-- [ ] **Drop `top_p` before forwarding.** Codex upstream → 400
-  `Unsupported parameter: top_p`.
-- [ ] **Drop `stop` before forwarding.** Codex upstream → 400
-  `Unsupported parameter: stop`.
-  - Decision needed: silently drop (matches `max_tokens` behavior) vs. return a
-    clear 400 from the bridge naming the unsupported field. Silent drop maximizes
-    client compatibility; explicit error is more honest. Recommend silent drop
-    for sampler params to match OpenAI clients that always send `temperature`.
+- [x] **Drop `temperature` / `top_p` / `stop`** before forwarding to Codex.
+  All three caused Codex `Unsupported parameter` 400s. Now parsed-and-dropped
+  in `toResponsesRequest`.
+- [x] **Handle single-role prompts.** System-only, user-only, developer-only,
+  and assistant-only requests no longer 400 on Codex's "instructions/input
+  required" guardrail — bridge synthesizes a placeholder for the empty side
+  and folds the present side into `input` when needed.
+- [x] **Reject `n > 1`** with explicit 400. Codex returns one output;
+  silent drop misled clients.
+- [x] **Validate `response_format`.** `json_object` / `json_schema` are
+  rejected with a 400 instead of silently returning free-form text.
+- [x] **Validate `modalities`.** Any non-`text` modality is rejected up front
+  since Codex produces text only.
+- [x] **Honor `stream_options.include_usage`.** Bridge no longer emits the
+  final usage chunk unconditionally — only when the client asks for it,
+  matching OpenAI's default-off behavior.
+- [x] **Parse `max_completion_tokens` / `presence_penalty` /
+  `frequency_penalty` / `seed` / `logprobs` / `top_logprobs`** so vanilla
+  OpenAI clients deserialize cleanly. Dropped silently like `max_tokens`.
 
-## Bug — both `instructions` and `input` are required
+## Documented (unavoidable backend limits)
 
-- [ ] **Handle single-role prompts.** A standard request with only
-  system/developer messages → 400 `One of "input" ... must be provided`; only
-  user/assistant messages → 400 `Instructions are required`.
-  Vanilla OpenAI accepts either alone. Synthesize a placeholder for the empty
-  side in `toResponsesRequest` (e.g. empty-string instructions allowed, or fold a
-  lone system prompt into `input`).
+These cannot be fixed at the bridge — Codex itself does not support them.
+The bridge surfaces an explicit 400 (when correctness matters) or parses
+and drops (when ignoring is harmless). See KNOWN_INCOMPATIBILITIES.md for
+the full split.
 
-## Bugs — silently dropped params (HTTP 200 but ignored, no client signal)
+- 400-on-arrival: `temperature`, `top_p`, `stop`, `max_tokens`,
+  `max_completion_tokens`, `n>1`, `response_format` (json_object/schema),
+  `modalities` (audio/non-text).
+- Silent drop: `presence_penalty`, `frequency_penalty`, `seed`, `logprobs`,
+  `top_logprobs`, `logit_bias`, `user`, `metadata`, `store`, `service_tier`,
+  `prediction`.
 
-- [ ] **`response_format` (`json_object` / `json_schema`) ignored.** Highest
-  priority: clients relying on guaranteed JSON get free-form text silently.
-  Either forward to the Responses `text.format` field or return 400 if
-  unsupported.
-- [ ] **`n > 1` ignored** — only one choice returned. Reject `n>1` with 400, or
-  document the single-choice limit.
-- [ ] **`presence_penalty` / `frequency_penalty` ignored** — not parsed.
-- [ ] **`seed` ignored** — not parsed.
-- [ ] **`logprobs` / `top_logprobs` ignored** — no logprobs in response.
-- [ ] **`max_completion_tokens` ignored** — not parsed (only `max_tokens` is,
-  and it is intentionally dropped). At least parse it for parity.
+## Open (low priority)
 
-## OpenAI / OpenRouter parity — CONFIRMED 2026-05-21
+- [ ] **Legacy `functions` / `function_call` fields.** Real OpenAI accepts
+  `function_call:"auto"` and rejects deprecated `functions:[...]` with a 400.
+  Bridge silently drops both. Acceptable since the documented migration path
+  is `tools` / `tool_choice`. Reject explicitly if a user reports confusion.
+- [ ] **Reasoning models (`o*` / `gpt-5.x`) themselves reject
+  `temperature`/`top_p` and require `max_completion_tokens`** — so for those
+  model classes some gaps are model-level, not provider-level. Bridge currently
+  drops both fields globally, which is the correct conservative choice.
 
-Probed `scripts/probe-openai-compat.sh` against codex-bridge (`gpt-5.4-mini`),
-OpenAI `gpt-4o-mini`, and OpenRouter `openai/gpt-4o-mini`.
+## OpenAI / OpenRouter parity baseline — 2026-05-21
 
-| Param / case | codex-bridge | OpenAI gpt-4o-mini | OpenRouter | Verdict |
-|--------------|--------------|--------------------|------------|---------|
-| `temperature` | 400 | 200 | 200 | Codex-backend limit → bridge should DROP |
-| `top_p`       | 400 | 200 | 200 | Codex-backend limit → bridge should DROP |
-| `stop`        | 400 | 200 | 200 | Codex-backend limit → bridge should DROP |
-| system-only prompt | 400 | 200 | 200 | **bridge gap** (dual requirement) |
-| user-only prompt   | 400 | 200 | 200 | **bridge gap** (dual requirement) |
-| `response_format` json_object | 200, **ignored** (not forwarded) | 200 / 400-guardrail (enforced) | same as OpenAI | **bridge gap** — silently drops |
-| `n=2` | 200, **1 choice** | 200, **2 choices** | 200 | **bridge gap** — extra choices lost |
-| `presence_penalty` / `frequency_penalty` | 200, dropped | 200 | 200 | bridge silently drops |
-| `seed` / `logprobs` | 200, dropped | 200 | 200 | bridge silently drops |
-| `max_tokens` / `max_completion_tokens` | 200, dropped | 200 | 200 | bridge drops (max_tokens intentional) |
+Probed `scripts/probe-openai-compat.sh` and
+`scripts/probe-openai-compat-extra.sh` against codex-bridge (`gpt-5.4-mini`)
+and OpenRouter `openai/gpt-4o-mini`.
 
-Conclusions:
-- `temperature` / `top_p` / `stop` rejection is a **Codex-backend** limit (real
-  OpenAI accepts them) → bridge should parse-and-drop, not forward.
-- The dual `instructions` + `input` requirement and the silent drops of
-  `response_format` / `n` / penalties / `seed` / `logprobs` are **bridge-side**
-  translation gaps — real OpenAI honors all of them.
-- `response_format` proof: OpenAI 400s with `'messages' must contain the word
-  'json'` (i.e. it *processes* the field); codex-bridge never forwards it, so
-  JSON mode is unenforced.
-
-- [ ] Note: newer OpenAI reasoning models (o-series / gpt-5.x) themselves reject
-  `temperature`/`top_p` and require `max_completion_tokens` — so for those model
-  classes some gaps are model behavior, not provider behavior. Record per-model
-  if targeting reasoning models through the bridge.
+| Param / case | codex-bridge (post-fix) | OpenAI gpt-4o-mini (via OR) | Verdict |
+|--------------|--------------------------|------------------------------|---------|
+| `temperature` / `top_p` / `stop` | 200, dropped | 200 | bridge drops (unavoidable) |
+| system-only / user-only / developer-only prompt | 200 (folded) | 200 | fixed |
+| assistant-first message | 200 (placeholder) | 200 | fixed |
+| `response_format` json_object/json_schema | 400 explicit | 200 enforced | unavoidable — bridge 400s clearly |
+| `n=2` | 400 explicit | 200, 2 choices | unavoidable — bridge 400s clearly |
+| `modalities` `audio` | 400 explicit | 404 (no provider) | unavoidable — bridge 400s clearly |
+| `stream_options.include_usage` | honored | honored | fixed |
+| `presence_penalty` / `frequency_penalty` / `seed` / `logprobs` / `logit_bias` / `user` / `metadata` | 200, dropped | 200 | silent drop, documented |
+| `max_tokens` / `max_completion_tokens` | 200, dropped | 200 | unavoidable |

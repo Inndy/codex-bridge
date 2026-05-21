@@ -9,20 +9,48 @@ import (
 )
 
 type ChatCompletionRequest struct {
-	Model       string          `json:"model"`
-	Messages    []ChatMessage   `json:"messages"`
-	Stream      bool            `json:"stream"`
-	Tools       []ChatTool      `json:"tools,omitempty"`
-	ToolChoice  json.RawMessage `json:"tool_choice,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
-	TopP        *float64        `json:"top_p,omitempty"`
-	Stop        any             `json:"stop,omitempty"`
-	// MaxTokens is parsed for compatibility but never forwarded: the
-	// ChatGPT-account Codex backend rejects max_output_tokens with HTTP 400
-	// "Unsupported parameter", and the upstream Codex CLI never sends it.
-	MaxTokens         *int   `json:"max_tokens,omitempty"`
-	ParallelToolCalls *bool  `json:"parallel_tool_calls,omitempty"`
-	ReasoningEffort   string `json:"reasoning_effort,omitempty"`
+	Model      string          `json:"model"`
+	Messages   []ChatMessage   `json:"messages"`
+	Stream     bool            `json:"stream"`
+	Tools      []ChatTool      `json:"tools,omitempty"`
+	ToolChoice json.RawMessage `json:"tool_choice,omitempty"`
+	// Sampler params: parsed for vanilla-OpenAI client compatibility but never
+	// forwarded — the ChatGPT-account Codex backend rejects all three with
+	// HTTP 400 "Unsupported parameter". Dropping mirrors max_tokens treatment.
+	// See KNOWN_INCOMPATIBILITIES.md.
+	Temperature      *float64 `json:"temperature,omitempty"`
+	TopP             *float64 `json:"top_p,omitempty"`
+	Stop             any      `json:"stop,omitempty"`
+	PresencePenalty  *float64 `json:"presence_penalty,omitempty"`
+	FrequencyPenalty *float64 `json:"frequency_penalty,omitempty"`
+	Seed             *int     `json:"seed,omitempty"`
+	Logprobs         *bool    `json:"logprobs,omitempty"`
+	TopLogprobs      *int     `json:"top_logprobs,omitempty"`
+	// Token caps: parsed but never forwarded — Codex rejects max_output_tokens
+	// with HTTP 400 and the upstream Codex CLI never sends it.
+	MaxTokens           *int `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int `json:"max_completion_tokens,omitempty"`
+	// N is rejected up front when >1: Codex Responses always returns a single
+	// output, so silently dropping extra choices would mislead clients.
+	N *int `json:"n,omitempty"`
+	// ResponseFormat is validated up front: json_object / json_schema cannot
+	// be enforced through the Codex backend, so they error rather than
+	// silently producing free-form text.
+	ResponseFormat json.RawMessage `json:"response_format,omitempty"`
+	// Modalities are validated up front: Codex only produces text, so any
+	// value other than ["text"] (or omitted) errors. Silent drop would let a
+	// client request audio and receive text with no signal.
+	Modalities []string `json:"modalities,omitempty"`
+	// StreamOptions.IncludeUsage controls whether the final SSE chunk carries
+	// the usage block. Parsed so streamChat can match OpenAI's default-off
+	// behavior instead of always emitting the chunk.
+	StreamOptions     *StreamOptions `json:"stream_options,omitempty"`
+	ParallelToolCalls *bool          `json:"parallel_tool_calls,omitempty"`
+	ReasoningEffort   string         `json:"reasoning_effort,omitempty"`
+}
+
+type StreamOptions struct {
+	IncludeUsage bool `json:"include_usage,omitempty"`
 }
 
 type ChatMessage struct {
@@ -58,9 +86,6 @@ type responsesRequest struct {
 	Instructions      string              `json:"instructions,omitempty"`
 	Tools             []responsesTool     `json:"tools,omitempty"`
 	ToolChoice        any                 `json:"tool_choice,omitempty"`
-	Temperature       *float64            `json:"temperature,omitempty"`
-	TopP              *float64            `json:"top_p,omitempty"`
-	Stop              any                 `json:"stop,omitempty"`
 	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
 	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
 }
@@ -113,7 +138,21 @@ type chatContentPart struct {
 	Text string `json:"text"`
 }
 
+// placeholderInstructions is sent to the Codex backend whenever a request has
+// no system/developer messages. Codex 400s on empty instructions even though
+// vanilla OpenAI accepts a user-only prompt — see KNOWN_INCOMPATIBILITIES.md.
+const placeholderInstructions = "You are a helpful assistant."
+
 func toResponsesRequest(req ChatCompletionRequest) (responsesRequest, error) {
+	if req.N != nil && *req.N > 1 {
+		return responsesRequest{}, fmt.Errorf("`n` > 1 is not supported (Codex returns a single output)")
+	}
+	if err := validateResponseFormat(req.ResponseFormat); err != nil {
+		return responsesRequest{}, err
+	}
+	if err := validateModalities(req.Modalities); err != nil {
+		return responsesRequest{}, err
+	}
 	instructions, err := collectInstructions(req.Messages)
 	if err != nil {
 		return responsesRequest{}, fmt.Errorf("system/developer message: %w", err)
@@ -121,6 +160,20 @@ func toResponsesRequest(req ChatCompletionRequest) (responsesRequest, error) {
 	input, err := toResponsesInput(req.Messages)
 	if err != nil {
 		return responsesRequest{}, err
+	}
+	// Codex requires both `instructions` and `input` to be non-empty. Vanilla
+	// OpenAI accepts a system-only or user-only prompt, so synthesize the
+	// missing side. For a system-only prompt, fold the system text into the
+	// `input` as a user turn — otherwise the model would see no content at all.
+	if len(input) == 0 {
+		fold := instructions
+		if fold == "" {
+			fold = "Please respond."
+		}
+		input = append(input, responseMessage("user", fold))
+	}
+	if instructions == "" {
+		instructions = placeholderInstructions
 	}
 	tools, err := toResponsesTools(req.Tools)
 	if err != nil {
@@ -133,9 +186,6 @@ func toResponsesRequest(req ChatCompletionRequest) (responsesRequest, error) {
 		Store:             false,
 		Instructions:      instructions,
 		Tools:             tools,
-		Temperature:       req.Temperature,
-		TopP:              req.TopP,
-		Stop:              req.Stop,
 		ParallelToolCalls: req.ParallelToolCalls,
 	}
 	if len(req.ToolChoice) > 0 {
@@ -149,6 +199,42 @@ func toResponsesRequest(req ChatCompletionRequest) (responsesRequest, error) {
 		body.Reasoning = &responsesReasoning{Effort: req.ReasoningEffort}
 	}
 	return body, nil
+}
+
+// validateModalities rejects modality lists the Codex backend cannot produce.
+// Codex Responses returns text only, so a client asking for audio output must
+// see a 400 instead of silently receiving text.
+func validateModalities(modalities []string) error {
+	for _, m := range modalities {
+		if m != "text" {
+			return fmt.Errorf("modalities: %q is not supported (Codex produces text only)", m)
+		}
+	}
+	return nil
+}
+
+// validateResponseFormat rejects response_format types the Codex backend cannot
+// enforce. Silent acceptance would return free-form text to a client expecting
+// guaranteed JSON — worst possible failure mode.
+func validateResponseFormat(raw json.RawMessage) error {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
+		return nil
+	}
+	var format struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(trimmed, &format); err != nil {
+		return fmt.Errorf("response_format: %w", err)
+	}
+	switch format.Type {
+	case "", "text":
+		return nil
+	case "json_object", "json_schema":
+		return fmt.Errorf("response_format type %q is not supported by the Codex backend", format.Type)
+	default:
+		return fmt.Errorf("response_format: unknown type %q", format.Type)
+	}
 }
 
 func collectInstructions(messages []ChatMessage) (string, error) {

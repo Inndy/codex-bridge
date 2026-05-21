@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 )
@@ -130,5 +131,155 @@ func TestToResponsesInputRejectsEmptyRole(t *testing.T) {
 	_, err := toResponsesInput([]ChatMessage{{Role: "", Content: json.RawMessage(`"hi"`)}})
 	if err == nil {
 		t.Fatal("expected error for empty role")
+	}
+}
+
+// Codex rejects temperature/top_p/stop with HTTP 400 even though vanilla
+// OpenAI accepts them. The bridge must parse-and-drop, never forward.
+func TestToResponsesRequestDropsUnsupportedSamplerParams(t *testing.T) {
+	temp, topP := 0.7, 0.9
+	req := ChatCompletionRequest{
+		Model:       "gpt-test",
+		Temperature: &temp,
+		TopP:        &topP,
+		Stop:        []string{"\n"},
+		Messages: []ChatMessage{
+			{Role: "system", Content: json.RawMessage(`"be brief"`)},
+			{Role: "user", Content: json.RawMessage(`"hi"`)},
+		},
+	}
+	body, err := toResponsesRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, banned := range []string{`"temperature"`, `"top_p"`, `"stop"`} {
+		if bytes.Contains(encoded, []byte(banned)) {
+			t.Fatalf("forwarded body must not contain %s: %s", banned, encoded)
+		}
+	}
+}
+
+func TestToResponsesRequestSynthesizesMissingInstructions(t *testing.T) {
+	req := ChatCompletionRequest{
+		Model: "gpt-test",
+		Messages: []ChatMessage{
+			{Role: "user", Content: json.RawMessage(`"hi"`)},
+		},
+	}
+	body, err := toResponsesRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body.Instructions == "" {
+		t.Fatal("expected synthesized instructions for user-only prompt, got empty")
+	}
+	if len(body.Input) != 1 {
+		t.Fatalf("expected user input preserved, got %d items", len(body.Input))
+	}
+}
+
+func TestToResponsesRequestFoldsSystemOnlyPromptIntoInput(t *testing.T) {
+	req := ChatCompletionRequest{
+		Model: "gpt-test",
+		Messages: []ChatMessage{
+			{Role: "system", Content: json.RawMessage(`"reply OK"`)},
+		},
+	}
+	body, err := toResponsesRequest(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body.Input) == 0 {
+		t.Fatal("expected system content folded into input, got empty input")
+	}
+	msg, ok := body.Input[0].(responsesMessageItem)
+	if !ok || msg.Role != "user" {
+		t.Fatalf("expected folded user message, got %#v", body.Input[0])
+	}
+	if len(msg.Content) == 0 || msg.Content[0].Text != "reply OK" {
+		t.Fatalf("expected system text in folded input, got %#v", msg.Content)
+	}
+	if body.Instructions == "" {
+		t.Fatal("expected placeholder instructions, got empty")
+	}
+}
+
+func TestToResponsesRequestRejectsNGreaterThanOne(t *testing.T) {
+	n := 2
+	req := ChatCompletionRequest{
+		Model:    "gpt-test",
+		N:        &n,
+		Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+	if _, err := toResponsesRequest(req); err == nil {
+		t.Fatal("expected error for n>1")
+	}
+}
+
+func TestToResponsesRequestAllowsNEqualOne(t *testing.T) {
+	n := 1
+	req := ChatCompletionRequest{
+		Model:    "gpt-test",
+		N:        &n,
+		Messages: []ChatMessage{{Role: "user", Content: json.RawMessage(`"hi"`)}},
+	}
+	if _, err := toResponsesRequest(req); err != nil {
+		t.Fatalf("n=1 must be accepted, got %v", err)
+	}
+}
+
+func TestValidateResponseFormat(t *testing.T) {
+	cases := []struct {
+		name    string
+		raw     string
+		wantErr bool
+	}{
+		{"empty", ``, false},
+		{"null", `null`, false},
+		{"text", `{"type":"text"}`, false},
+		{"json_object rejected", `{"type":"json_object"}`, true},
+		{"json_schema rejected", `{"type":"json_schema","json_schema":{"name":"x","schema":{}}}`, true},
+		{"unknown rejected", `{"type":"bogus"}`, true},
+		{"malformed rejected", `[`, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			err := validateResponseFormat(json.RawMessage(c.raw))
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, c.wantErr)
+			}
+		})
+	}
+}
+
+// Extra OpenAI fields the bridge accepts for schema compatibility but never
+// acts on. JSON decode must not error so vanilla clients keep working.
+func TestChatCompletionRequestParsesCompatFields(t *testing.T) {
+	raw := []byte(`{
+		"model":"gpt-test",
+		"messages":[{"role":"user","content":"hi"}],
+		"presence_penalty":0.1,
+		"frequency_penalty":0.2,
+		"seed":42,
+		"logprobs":true,
+		"top_logprobs":5,
+		"max_completion_tokens":16
+	}`)
+	var req ChatCompletionRequest
+	if err := json.Unmarshal(raw, &req); err != nil {
+		t.Fatal(err)
+	}
+	if req.Seed == nil || *req.Seed != 42 {
+		t.Fatalf("seed = %#v", req.Seed)
+	}
+	if req.MaxCompletionTokens == nil || *req.MaxCompletionTokens != 16 {
+		t.Fatalf("max_completion_tokens = %#v", req.MaxCompletionTokens)
+	}
+	if req.Logprobs == nil || !*req.Logprobs {
+		t.Fatalf("logprobs = %#v", req.Logprobs)
 	}
 }

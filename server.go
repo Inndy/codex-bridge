@@ -105,7 +105,8 @@ func (s *Server) handleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	id := newID("chatcmpl_")
 	created := time.Now().Unix()
 	if req.Stream {
-		s.streamChat(w, r, resp, requestID, id, created, req.Model, start)
+		includeUsage := req.StreamOptions != nil && req.StreamOptions.IncludeUsage
+		s.streamChat(w, r, resp, requestID, id, created, req.Model, start, includeUsage)
 		return
 	}
 	s.completeChat(w, r, resp, requestID, id, created, req.Model, start)
@@ -167,7 +168,7 @@ func (s *Server) completeChat(w http.ResponseWriter, r *http.Request, resp *http
 	writeJSON(w, http.StatusOK, agg.Completion(id, model, created))
 }
 
-func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, requestID, id string, created int64, model string, start time.Time) {
+func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, resp *http.Response, requestID, id string, created int64, model string, start time.Time, includeUsage bool) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -199,7 +200,7 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, resp *http.R
 	completion := agg.Completion(id, model, created)
 	finish := completion.Choices[0].FinishReason
 	_ = writeSSE(w, streamChunk(id, created, model, map[string]any{}, finish))
-	if completion.Usage != nil {
+	if includeUsage && completion.Usage != nil {
 		_ = writeSSE(w, map[string]any{
 			"id":      id,
 			"object":  "chat.completion.chunk",
