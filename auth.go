@@ -161,6 +161,81 @@ func deriveAccountID(idToken string) string {
 	return claims.OpenAIAuth.ChatGPTAccountID
 }
 
+const proactiveRefreshMargin = 10 * time.Minute
+const proactiveRefreshRetry = 5 * time.Minute
+
+// tokenExpiry parses the "exp" claim from a JWT access token.
+// Returns the expiry time and true, or zero time and false if unavailable.
+func tokenExpiry(accessToken string) (time.Time, bool) {
+	parts := strings.Split(accessToken, ".")
+	if len(parts) != 3 {
+		return time.Time{}, false
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		payload, err = base64.URLEncoding.DecodeString(parts[1])
+		if err != nil {
+			return time.Time{}, false
+		}
+	}
+	var claims struct {
+		Exp int64 `json:"exp"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil || claims.Exp == 0 {
+		return time.Time{}, false
+	}
+	return time.Unix(claims.Exp, 0), true
+}
+
+// StartProactiveRefresh starts a background goroutine that fires the auth hook
+// proactively before the access token expires. No-op if no hook is configured.
+func (m *AuthManager) StartProactiveRefresh(ctx context.Context) {
+	if m.hook.Command == "" {
+		return
+	}
+	go m.proactiveRefreshLoop(ctx)
+}
+
+func (m *AuthManager) proactiveRefreshLoop(ctx context.Context) {
+	for {
+		auth := m.auth.Load()
+		if auth == nil {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Minute):
+				continue
+			}
+		}
+		expiry, ok := tokenExpiry(auth.AccessToken)
+		if !ok {
+			m.logger.WarnContext(ctx, "access token has no exp claim; proactive refresh disabled")
+			return
+		}
+		wait := time.Until(expiry.Add(-proactiveRefreshMargin))
+		if wait > 0 {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(wait):
+			}
+		}
+		// Skip if another goroutine already refreshed while we were sleeping.
+		if m.auth.Load() != auth {
+			continue
+		}
+		m.logger.InfoContext(ctx, "proactive token refresh", "expiry", expiry)
+		if err := m.HandleAuthFailure(ctx); err != nil {
+			m.logger.WarnContext(ctx, "proactive token refresh failed", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(proactiveRefreshRetry):
+			}
+		}
+	}
+}
+
 func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger, failing *Auth) error {
 	timeout := hook.Timeout
 	if timeout <= 0 {

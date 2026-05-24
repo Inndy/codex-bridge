@@ -215,6 +215,83 @@ func TestAuthHookCountingHelper(t *testing.T) {
 }
 
 
+func TestTokenExpiry(t *testing.T) {
+	now := time.Now().Truncate(time.Second)
+
+	t.Run("reads exp claim", func(t *testing.T) {
+		jwt := testJWT(map[string]any{"exp": now.Unix()})
+		got, ok := tokenExpiry(jwt)
+		if !ok {
+			t.Fatal("expected ok=true")
+		}
+		if !got.Equal(now) {
+			t.Fatalf("expiry = %v, want %v", got, now)
+		}
+	})
+
+	t.Run("no exp claim returns false", func(t *testing.T) {
+		jwt := testJWT(map[string]any{"sub": "user"})
+		if _, ok := tokenExpiry(jwt); ok {
+			t.Fatal("expected ok=false for token without exp")
+		}
+	})
+
+	t.Run("non-JWT returns false", func(t *testing.T) {
+		if _, ok := tokenExpiry("not-a-jwt"); ok {
+			t.Fatal("expected ok=false for non-JWT")
+		}
+	})
+}
+
+func TestProactiveRefreshFiresBeforeExpiry(t *testing.T) {
+	dir := t.TempDir()
+	authPath := filepath.Join(dir, "auth.json")
+	expiry := time.Now().Add(200 * time.Millisecond)
+	initialToken := testJWT(map[string]any{"exp": expiry.Unix(), "sub": "u"})
+	writeJSONFile(t, authPath, map[string]any{
+		"tokens": map[string]any{
+			"access_token": initialToken,
+			"account_id":   "acct_1",
+		},
+	})
+
+	triggered := filepath.Join(dir, "triggered")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	manager := NewAuthManager(authPath, HookConfig{
+		Command: os.Args[0],
+		Args:    []string{"-test.run=TestAuthHookWriteTriggeredHelper", "--", triggered, authPath},
+		Timeout: 5 * time.Second,
+	}, logger)
+	if err := manager.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Token expires in 200ms, well within the 10-minute margin, so the
+	// goroutine fires immediately without waiting.
+	manager.StartProactiveRefresh(t.Context())
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(triggered); err == nil {
+			return // hook fired
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("proactive refresh hook did not fire within 5s")
+}
+
+func TestAuthHookWriteTriggeredHelper(t *testing.T) {
+	args := flag.Args()
+	if len(args) < 2 {
+		return
+	}
+	if err := os.WriteFile(args[0], []byte("triggered"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeAuthFile(t, args[1], "refreshed")
+	os.Exit(0)
+}
+
 func testJWT(payload map[string]any) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none"}`))
 	body, _ := json.Marshal(payload)
