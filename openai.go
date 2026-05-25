@@ -342,11 +342,11 @@ func (a *StreamAggregator) applyMessageItem(item *responseItem) {
 
 func (a *StreamAggregator) applyCompletedResponse(response *completedResponse) {
 	if len(response.Usage) > 0 {
-		var raw any
-		if err := json.Unmarshal(response.Usage, &raw); err == nil {
-			a.usage = toOpenAIUsage(raw)
-		} else {
+		var codex codexUsage
+		if err := json.Unmarshal(response.Usage, &codex); err != nil {
 			a.logger.Warn("upstream usage payload failed to decode", "error", err)
+		} else {
+			a.usage = codexUsageToOpenAI(codex)
 		}
 	}
 	for i := range response.Output {
@@ -382,18 +382,7 @@ func finishReasonFromResponse(response *completedResponse) string {
 	}
 }
 
-func toOpenAIUsage(raw any) *Usage {
-	if raw == nil {
-		return nil
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return nil
-	}
-	var codex codexUsage
-	if err := json.Unmarshal(encoded, &codex); err != nil {
-		return nil
-	}
+func codexUsageToOpenAI(codex codexUsage) *Usage {
 	u := &Usage{
 		PromptTokens:     codex.InputTokens,
 		CompletionTokens: codex.OutputTokens,
