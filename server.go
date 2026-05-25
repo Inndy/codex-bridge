@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -153,8 +152,9 @@ func (s *Server) responsesWithRetry(ctx context.Context, body responsesRequest) 
 	if err != nil || !isAuthStatus(resp.StatusCode) {
 		return resp, err
 	}
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	drainAndClose(resp)
-	upstreamErr := fmt.Errorf("upstream status %d before auth refresh", resp.StatusCode)
+	upstreamErr := upstreamError(resp.StatusCode, respBody)
 	if hookErr := s.auth.HandleAuthFailure(ctx); hookErr != nil {
 		return nil, errors.Join(upstreamErr, hookErr)
 	}
