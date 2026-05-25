@@ -12,10 +12,16 @@
 # so no approval prompts appear and sandbox mode is irrelevant.
 set -euo pipefail
 
-mkdir -p /tmp/.codex-bridge-refresh
+# Workdir lives next to this script so the path is stable (for codex
+# trust_workdir enrollment) and its parent is not world-writable —
+# defeats the /tmp pre-creation attack.
+script_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
+workdir="$script_dir/.tmp-workdir"
+mkdir -p "$workdir"
+[ -f "$workdir/.gitignore" ] || printf '*\n' > "$workdir/.gitignore"
 
 exec codex exec \
   --json \
   --ephemeral \
-  -C /tmp/.codex-bridge-refresh \
+  -C "$workdir" \
   "Reply with the single word: ok"
