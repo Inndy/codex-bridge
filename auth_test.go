@@ -82,7 +82,7 @@ func TestAuthCandidatesOrder(t *testing.T) {
 
 func TestRunAuthHook(t *testing.T) {
 	marker := filepath.Join(t.TempDir(), "marker")
-	err := runAuthHook(context.Background(), HookConfig{
+	err := runAuthHook(HookConfig{
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestAuthHookHelper", "--", marker},
 		Timeout: 5 * time.Second,
@@ -108,7 +108,7 @@ func TestAuthHookHelper(t *testing.T) {
 
 func TestRunAuthHookPassesAuthContextEnv(t *testing.T) {
 	envFile := filepath.Join(t.TempDir(), "env")
-	err := runAuthHook(context.Background(), HookConfig{
+	err := runAuthHook(HookConfig{
 		Command: os.Args[0],
 		Args:    []string{"-test.run=TestAuthHookEnvCaptureHelper", "--", envFile},
 		Timeout: 5 * time.Second,

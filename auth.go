@@ -29,11 +29,59 @@ type HookConfig struct {
 }
 
 type AuthManager struct {
-	authPath  string
-	hook      HookConfig
-	logger    *slog.Logger
-	auth      atomic.Pointer[Auth]
-	refreshMu sync.Mutex
+	authPath string
+	hook     HookConfig
+	logger   *slog.Logger
+	auth     atomic.Pointer[Auth]
+	refresh  refreshGroup
+}
+
+// refreshCall tracks a single in-flight hook execution and its waiters.
+type refreshCall struct {
+	seen *Auth
+	done chan struct{}
+	err  error
+}
+
+// refreshGroup coalesces concurrent auth-refresh attempts for the same stale
+// token. Only one hook runs at a time; all callers observing the same stale
+// *Auth pointer share its result. Callers that observed a different (older)
+// pointer return nil immediately — the token already moved on.
+type refreshGroup struct {
+	mu       sync.Mutex
+	inflight *refreshCall
+}
+
+func (g *refreshGroup) Do(ctx context.Context, seen *Auth, fn func() error) error {
+	g.mu.Lock()
+	if c := g.inflight; c != nil {
+		if c.seen != seen {
+			g.mu.Unlock()
+			return nil
+		}
+		g.mu.Unlock()
+		return g.wait(ctx, c)
+	}
+	c := &refreshCall{seen: seen, done: make(chan struct{})}
+	g.inflight = c
+	g.mu.Unlock()
+	go func() {
+		c.err = fn()
+		g.mu.Lock()
+		g.inflight = nil
+		close(c.done)
+		g.mu.Unlock()
+	}()
+	return g.wait(ctx, c)
+}
+
+func (g *refreshGroup) wait(ctx context.Context, c *refreshCall) error {
+	select {
+	case <-c.done:
+		return c.err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func NewAuthManager(authPath string, hook HookConfig, logger *slog.Logger) *AuthManager {
@@ -63,15 +111,15 @@ func (m *AuthManager) HandleAuthFailure(ctx context.Context) error {
 		return errors.New("upstream auth failed and no auth failure hook is configured")
 	}
 	seen := m.auth.Load()
-	m.refreshMu.Lock()
-	defer m.refreshMu.Unlock()
-	if m.auth.Load() != seen {
-		return nil
-	}
-	if err := runAuthHook(ctx, m.hook, m.logger, seen); err != nil {
-		return err
-	}
-	return m.Load(ctx)
+	return m.refresh.Do(ctx, seen, func() error {
+		if m.auth.Load() != seen {
+			return nil
+		}
+		if err := runAuthHook(m.hook, m.logger, seen); err != nil {
+			return err
+		}
+		return m.Load(context.Background())
+	})
 }
 
 func LoadAuth(authPath string) (*Auth, error) {
@@ -236,23 +284,23 @@ func (m *AuthManager) proactiveRefreshLoop(ctx context.Context) {
 	}
 }
 
-func runAuthHook(ctx context.Context, hook HookConfig, logger *slog.Logger, failing *Auth) error {
+func runAuthHook(hook HookConfig, logger *slog.Logger, failing *Auth) error {
 	timeout := hook.Timeout
 	if timeout <= 0 {
 		timeout = time.Minute
 	}
-	hookCtx, cancel := context.WithTimeout(ctx, timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	logger.InfoContext(ctx, "running auth failure hook", "command", hook.Command, "timeout", timeout.String())
-	cmd := exec.CommandContext(hookCtx, hook.Command, hook.Args...)
+	cmd := exec.CommandContext(ctx, hook.Command, hook.Args...)
 	cmd.Env = append(os.Environ(), authHookEnv(failing)...)
 	// Hook output is discarded: a refresh command may print tokens
 	// (e.g. `codex login --verbose`), and we forward errors through structured
 	// logs and HTTP responses where any captured bytes would leak. Operators
 	// debugging a broken hook should run it directly outside this process.
 	err := cmd.Run()
-	if hookCtx.Err() == context.DeadlineExceeded {
+	if ctx.Err() == context.DeadlineExceeded {
 		return fmt.Errorf("auth failure hook timed out after %s", timeout)
 	}
 	if err != nil {
