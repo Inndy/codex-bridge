@@ -162,15 +162,11 @@ func toResponsesRequest(req ChatCompletionRequest) (responsesRequest, error) {
 		return responsesRequest{}, err
 	}
 	// Codex requires both `instructions` and `input` to be non-empty. Vanilla
-	// OpenAI accepts a system-only or user-only prompt, so synthesize the
-	// missing side. For a system-only prompt, fold the system text into the
-	// `input` as a user turn — otherwise the model would see no content at all.
+	// OpenAI accepts a system-only or user-only prompt, so synthesize a
+	// placeholder user turn. The system text travels via `instructions` only;
+	// folding it into `input` too would make the model see it twice.
 	if len(input) == 0 {
-		fold := instructions
-		if fold == "" {
-			fold = "Please respond."
-		}
-		input = append(input, responseMessage("user", fold))
+		input = append(input, responseMessage("user", "Please respond."))
 	}
 	if instructions == "" {
 		instructions = placeholderInstructions

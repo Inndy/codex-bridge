@@ -182,7 +182,7 @@ func TestToResponsesRequestSynthesizesMissingInstructions(t *testing.T) {
 	}
 }
 
-func TestToResponsesRequestFoldsSystemOnlyPromptIntoInput(t *testing.T) {
+func TestToResponsesRequestSystemOnlyPromptKeepsInstructionsAndPlaceholderInput(t *testing.T) {
 	req := ChatCompletionRequest{
 		Model: "gpt-test",
 		Messages: []ChatMessage{
@@ -193,18 +193,18 @@ func TestToResponsesRequestFoldsSystemOnlyPromptIntoInput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(body.Input) == 0 {
-		t.Fatal("expected system content folded into input, got empty input")
+	if body.Instructions != "reply OK" {
+		t.Fatalf("expected system text in instructions, got %q", body.Instructions)
+	}
+	if len(body.Input) != 1 {
+		t.Fatalf("expected one synthesized input, got %d", len(body.Input))
 	}
 	msg, ok := body.Input[0].(responsesMessageItem)
 	if !ok || msg.Role != "user" {
-		t.Fatalf("expected folded user message, got %#v", body.Input[0])
+		t.Fatalf("expected placeholder user message, got %#v", body.Input[0])
 	}
-	if len(msg.Content) == 0 || msg.Content[0].Text != "reply OK" {
-		t.Fatalf("expected system text in folded input, got %#v", msg.Content)
-	}
-	if body.Instructions == "" {
-		t.Fatal("expected placeholder instructions, got empty")
+	if len(msg.Content) != 1 || msg.Content[0].Text != "Please respond." {
+		t.Fatalf("expected placeholder text, got %#v", msg.Content)
 	}
 }
 
