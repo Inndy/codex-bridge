@@ -108,6 +108,28 @@ func TestChatHandlerStream(t *testing.T) {
 	}
 }
 
+func TestChatHandlerStreamSurfacesUpstreamError(t *testing.T) {
+	proxy := newTestProxy(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":\"O\"}\n\n")
+		_, _ = io.WriteString(w, "data: {\"type\":\"response.failed\",\"response\":{\"status\":\"failed\"}}\n\n")
+	}))
+	defer proxy.Close()
+
+	resp, err := http.Post(proxy.URL+"/v1/chat/completions", "application/json", strings.NewReader(`{"model":"gpt-test","stream":true,"messages":[{"role":"user","content":"say ok"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), `"error"`) {
+		t.Fatalf("expected error field in stream body, got %s", body)
+	}
+	if !strings.Contains(string(body), "data: [DONE]") {
+		t.Fatalf("expected [DONE] terminator after error, got %s", body)
+	}
+}
+
 func TestRuntimeAuthFailureRunsHookAndRetries(t *testing.T) {
 	dir := t.TempDir()
 	authPath := filepath.Join(dir, "auth.json")

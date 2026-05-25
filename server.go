@@ -202,6 +202,21 @@ func (s *Server) streamChat(w http.ResponseWriter, r *http.Request, resp *http.R
 	})
 	if err != nil {
 		s.logger.ErrorContext(r.Context(), "chat stream failed", "request_id", requestID, "model", model, "duration_ms", time.Since(start).Milliseconds(), "error", err)
+		_ = writeSSE(w, map[string]any{
+			"id":      id,
+			"object":  "chat.completion.chunk",
+			"created": created,
+			"model":   model,
+			"choices": []any{},
+			"error": map[string]any{
+				"message": err.Error(),
+				"type":    "upstream_error",
+			},
+		})
+		_ = writeSSE(w, "[DONE]")
+		if flusher != nil {
+			flusher.Flush()
+		}
 		return
 	}
 	completion := agg.Completion(id, model, created)
