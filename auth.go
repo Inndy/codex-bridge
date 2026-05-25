@@ -257,8 +257,13 @@ func (m *AuthManager) proactiveRefreshLoop(ctx context.Context) {
 		}
 		expiry, ok := tokenExpiry(auth.AccessToken)
 		if !ok {
-			m.logger.WarnContext(ctx, "access token has no exp claim; proactive refresh disabled")
-			return
+			m.logger.WarnContext(ctx, "access token has no exp claim; will retry", "retry", proactiveRefreshRetry)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(proactiveRefreshRetry):
+			}
+			continue
 		}
 		wait := time.Until(expiry.Add(-proactiveRefreshMargin))
 		if wait > 0 {
