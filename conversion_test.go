@@ -134,6 +134,33 @@ func TestToResponsesInputRejectsEmptyRole(t *testing.T) {
 	}
 }
 
+func TestToResponsesInputRejectsMissingToolCallFields(t *testing.T) {
+	cases := []struct {
+		name string
+		msgs []ChatMessage
+	}{
+		{
+			"assistant tool_call missing id",
+			[]ChatMessage{{Role: "assistant", ToolCalls: []ChatToolCall{{Function: ChatToolFunction{Name: "f"}}}}},
+		},
+		{
+			"assistant tool_call missing function.name",
+			[]ChatMessage{{Role: "assistant", ToolCalls: []ChatToolCall{{ID: "call_1"}}}},
+		},
+		{
+			"tool message missing tool_call_id",
+			[]ChatMessage{{Role: "tool", Content: json.RawMessage(`"out"`)}},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := toResponsesInput(c.msgs); err == nil {
+				t.Fatal("expected error")
+			}
+		})
+	}
+}
+
 // Codex rejects temperature/top_p/stop with HTTP 400 even though vanilla
 // OpenAI accepts them. The bridge must parse-and-drop, never forward.
 func TestToResponsesRequestDropsUnsupportedSamplerParams(t *testing.T) {

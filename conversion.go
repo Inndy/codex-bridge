@@ -264,9 +264,12 @@ func toResponsesInput(messages []ChatMessage) ([]any, error) {
 			if text != "" {
 				input = append(input, responseMessage("assistant", text))
 			}
-			for _, call := range msg.ToolCalls {
-				if call.ID == "" || call.Function.Name == "" {
-					continue
+			for j, call := range msg.ToolCalls {
+				if call.ID == "" {
+					return nil, fmt.Errorf("messages[%d].tool_calls[%d]: id is required", i, j)
+				}
+				if call.Function.Name == "" {
+					return nil, fmt.Errorf("messages[%d].tool_calls[%d].function.name is required", i, j)
 				}
 				input = append(input, responsesFunctionCallItem{
 					Type:      "function_call",
@@ -277,7 +280,7 @@ func toResponsesInput(messages []ChatMessage) ([]any, error) {
 			}
 		case "tool":
 			if msg.ToolCallID == "" {
-				continue
+				return nil, fmt.Errorf("messages[%d]: tool_call_id is required for tool role", i)
 			}
 			text, err := contentText(msg.Content)
 			if err != nil {
