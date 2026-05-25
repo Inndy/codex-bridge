@@ -282,9 +282,6 @@ func (a *StreamAggregator) finalizeFunctionItem(item *responseItem) {
 	}
 	a.ensureToolCall(callID, name, args)
 	entry := a.toolCalls[callID]
-	if entry == nil {
-		return
-	}
 	if name != "" {
 		entry.Function.Name = name
 	}
