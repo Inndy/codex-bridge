@@ -22,6 +22,12 @@ runtime libraries. This proxy keeps the production code small and uses only the
 Go standard library, reducing dependency surface and supply-chain risk. It is
 also intended to make the entire production codebase easy to review end to end.
 
+## Principles
+
+- **Minimal** — production code stays small, uses only the Go standard library, and is easy to review end to end.
+- **Usable** — surface mirrors the OpenAI Chat Completions API exactly enough to drop in.
+- **Correctness** — observable behavior matches OpenAI semantics; streaming and non-streaming results agree.
+
 ## Install
 
 ```sh
