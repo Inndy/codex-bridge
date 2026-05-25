@@ -25,6 +25,7 @@ type Config struct {
 	AuthFailHook    string
 	AuthFailHookArg []string
 	AuthHookTimeout time.Duration
+	CORSAllowAll    bool
 }
 
 func parseConfig(args []string) (Config, error) {
@@ -38,6 +39,7 @@ func parseConfig(args []string) (Config, error) {
 	fs.StringVar(&cfg.AuthFailHook, "auth-fail-hook", "", "command to run after Codex auth failure")
 	fs.Var(&hookArgs, "auth-fail-hook-arg", "argument for --auth-fail-hook; may be repeated")
 	fs.DurationVar(&cfg.AuthHookTimeout, "auth-hook-timeout", time.Minute, "auth failure hook timeout")
+	fs.BoolVar(&cfg.CORSAllowAll, "cors-allow-all", false, "set Access-Control-Allow-Origin: * on every response")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}

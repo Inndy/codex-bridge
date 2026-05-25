@@ -50,7 +50,7 @@ func TestSmokeLiveOptIn(t *testing.T) {
 		t.Fatal(err)
 	}
 	upstream := NewUpstreamClient("https://chatgpt.com/backend-api/codex", "0.125.0", auth)
-	server := httptest.NewServer(NewServer(upstream, auth, logger).Routes())
+	server := httptest.NewServer(NewServer(upstream, auth, logger, false).Routes())
 	defer server.Close()
 
 	client := openai.NewClient(option.WithBaseURL(server.URL+"/v1"), option.WithAPIKey("ignored"))

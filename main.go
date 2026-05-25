@@ -27,7 +27,7 @@ func main() {
 	}
 	auth.StartProactiveRefresh(ctx)
 	upstream := NewUpstreamClient(cfg.CodexBaseURL, cfg.CodexVersion, auth)
-	server := NewServer(upstream, auth, logger)
+	server := NewServer(upstream, auth, logger, cfg.CORSAllowAll)
 	if _, status, err := server.modelsWithRetry(ctx); err != nil {
 		logger.Error("startup auth validation failed", "status", status, "error", err)
 		os.Exit(1)

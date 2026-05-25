@@ -12,16 +12,18 @@ import (
 )
 
 type Server struct {
-	upstream *UpstreamClient
-	auth     *AuthManager
-	logger   *slog.Logger
+	upstream     *UpstreamClient
+	auth         *AuthManager
+	logger       *slog.Logger
+	corsAllowAll bool
 }
 
-func NewServer(upstream *UpstreamClient, auth *AuthManager, logger *slog.Logger) *Server {
+func NewServer(upstream *UpstreamClient, auth *AuthManager, logger *slog.Logger, corsAllowAll bool) *Server {
 	return &Server{
-		upstream: upstream,
-		auth:     auth,
-		logger:   logger,
+		upstream:     upstream,
+		auth:         auth,
+		logger:       logger,
+		corsAllowAll: corsAllowAll,
 	}
 }
 
@@ -29,14 +31,19 @@ func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/models", s.handleModels)
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
-	return cors(mux)
+	if s.corsAllowAll {
+		return cors(mux)
+	}
+	return mux
 }
+
+const corsHeaders = "authorization, content-type, accept, openai-organization, openai-project, x-stainless-arch, x-stainless-lang, x-stainless-os, x-stainless-package-version, x-stainless-retry-count, x-stainless-runtime, x-stainless-runtime-version, x-stainless-timeout"
 
 func cors(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "authorization, content-type, accept, openai-organization, openai-project, x-stainless-arch, x-stainless-lang, x-stainless-os, x-stainless-package-version, x-stainless-retry-count, x-stainless-runtime, x-stainless-runtime-version, x-stainless-timeout")
+		w.Header().Set("Access-Control-Allow-Headers", corsHeaders)
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
