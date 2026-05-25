@@ -329,11 +329,16 @@ func (a *StreamAggregator) applyMessageItem(item *responseItem) {
 		}
 		a.text = b.String()
 	case "reasoning":
+		if a.reasoning != "" {
+			return
+		}
+		var b strings.Builder
 		for _, part := range item.Summary {
 			if part.Text != "" {
-				a.reasoning += part.Text
+				b.WriteString(part.Text)
 			}
 		}
+		a.reasoning = b.String()
 	}
 }
 
