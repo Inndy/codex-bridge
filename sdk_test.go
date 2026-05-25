@@ -12,6 +12,7 @@ import (
 
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
+	"github.com/openai/openai-go/v3/shared"
 )
 
 func TestOfficialSDKChatCompletionAgainstProxy(t *testing.T) {
@@ -172,13 +173,19 @@ func TestSmokeReasoningContent(t *testing.T) {
 	defer server.Close()
 
 	client := openai.NewClient(option.WithBaseURL(server.URL+"/v1"), option.WithAPIKey("ignored"))
-	prompt := "Think step by step, then reply with only the final number. What is 17 * 23?"
+	// Logic puzzles trigger Codex reasoning more reliably than math, which
+	// OpenAI may handle via tool/shortcut paths instead of visible reasoning.
+	// Empty reasoning_content is still acceptable — OpenAI may withhold the
+	// summary stream entirely (anti-distillation) — so the test only asserts
+	// no duplication when content IS surfaced.
+	prompt := "Three suspects: Alice, Bob, Carol. Exactly one is lying. Alice says Bob is lying. Bob says Carol is lying. Carol says both Alice and Bob are lying. Who is lying? Walk through it then give the name."
 
 	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Model: "gpt-5.4",
 		Messages: []openai.ChatCompletionMessageParamUnion{
 			openai.UserMessage(prompt),
 		},
+		ReasoningEffort: shared.ReasoningEffortHigh,
 	})
 	if err != nil {
 		t.Fatalf("reasoning request failed: %v", err)
@@ -209,7 +216,11 @@ func TestSmokeOpenAIParitySystemOnly(t *testing.T) {
 	if apiKey == "" {
 		t.Skip("set OPENAI_API_KEY to run vanilla OpenAI parity test")
 	}
-	client := openai.NewClient(option.WithAPIKey(apiKey))
+	opts := []option.RequestOption{option.WithAPIKey(apiKey)}
+	if base := getenv("OPENAI_BASE_URL"); base != "" {
+		opts = append(opts, option.WithBaseURL(base))
+	}
+	client := openai.NewClient(opts...)
 	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
 		Model: "gpt-4o-mini",
 		Messages: []openai.ChatCompletionMessageParamUnion{

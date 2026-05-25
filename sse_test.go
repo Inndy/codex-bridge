@@ -204,3 +204,48 @@ func TestStreamAggregatorTextAndToolCalls(t *testing.T) {
 		t.Fatalf("chunk count = %d", chunkCount)
 	}
 }
+
+// TestStreamAggregatorReasoningNotDuplicated guards #59: when a stream emits
+// reasoning deltas AND an output_item.done event carrying the same reasoning
+// summary, the aggregator must take the delta path as authoritative and
+// ignore the done event's reasoning content rather than appending it again.
+func TestStreamAggregatorReasoningNotDuplicated(t *testing.T) {
+	agg := NewStreamAggregator(nil)
+	events := []string{
+		`{"type":"response.reasoning_summary_text.delta","delta":"think "}`,
+		`{"type":"response.reasoning_summary_text.delta","delta":"hard"}`,
+		`{"type":"response.output_item.done","item":{"id":"item_r","type":"reasoning","summary":[{"type":"summary_text","text":"think hard"}]}}`,
+		`{"type":"response.output_text.delta","delta":"answer"}`,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	}
+	for _, data := range events {
+		if _, err := agg.ApplyEvent(SSEEvent{Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	if got := completion.Choices[0].Message.ReasoningContent; got != "think hard" {
+		t.Fatalf("reasoning duplicated or wrong: %q (want %q)", got, "think hard")
+	}
+}
+
+// TestStreamAggregatorReasoningFromDoneOnly covers the non-streamed path:
+// when no delta events fire, output_item.done is the only source and must
+// populate reasoning_content.
+func TestStreamAggregatorReasoningFromDoneOnly(t *testing.T) {
+	agg := NewStreamAggregator(nil)
+	events := []string{
+		`{"type":"response.output_item.done","item":{"id":"item_r","type":"reasoning","summary":[{"type":"summary_text","text":"final reasoning"}]}}`,
+		`{"type":"response.output_text.delta","delta":"OK"}`,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	}
+	for _, data := range events {
+		if _, err := agg.ApplyEvent(SSEEvent{Data: data}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	completion := agg.Completion("chatcmpl_test", "gpt-test", 1)
+	if got := completion.Choices[0].Message.ReasoningContent; got != "final reasoning" {
+		t.Fatalf("reasoning from done-only = %q (want %q)", got, "final reasoning")
+	}
+}
