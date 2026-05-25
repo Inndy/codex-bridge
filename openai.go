@@ -103,6 +103,7 @@ type StreamAggregator struct {
 	activeToolItemID  map[string]string
 	syntheticByOutput map[int]string
 	nextSyntheticTool int
+	fallbackToolID    string
 }
 
 type streamEvent struct {
@@ -444,8 +445,12 @@ func (a *StreamAggregator) callIDFor(ev streamEvent) string {
 		a.syntheticByOutput[idx] = key
 		return key
 	}
-	a.nextSyntheticTool++
-	return syntheticCallIDPrefix + strconv.Itoa(a.nextSyntheticTool)
+	if a.fallbackToolID == "" {
+		a.nextSyntheticTool++
+		a.fallbackToolID = syntheticCallIDPrefix + strconv.Itoa(a.nextSyntheticTool)
+		a.logger.Warn("tool-call event missing call_id, item_id, and output_index; coalescing into single synthetic call", "id", a.fallbackToolID)
+	}
+	return a.fallbackToolID
 }
 
 func (a *StreamAggregator) ensureToolCall(callID, name, args string) {
