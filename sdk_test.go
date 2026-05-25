@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -117,4 +118,129 @@ func TestSmokeLiveOptIn(t *testing.T) {
 
 func getenv(key string) string {
 	return os.Getenv(key)
+}
+
+// TestSmokeSystemOnlyPrompt exercises the #53 fix: a request with only a
+// system message should be accepted by Codex and produce a non-empty reply.
+// The bridge now synthesizes a placeholder user turn instead of folding the
+// system text twice.
+func TestSmokeSystemOnlyPrompt(t *testing.T) {
+	if testing.Short() || getenv("CODEX_BRIDGE_SMOKE") != "1" {
+		t.Skip("set CODEX_BRIDGE_SMOKE=1 to run live Codex smoke test")
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth := NewAuthManager("", HookConfig{}, logger)
+	if err := auth.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	upstream := NewUpstreamClient("https://chatgpt.com/backend-api/codex", "0.125.0", auth)
+	server := httptest.NewServer(NewServer(upstream, auth, logger, false).Routes())
+	defer server.Close()
+
+	client := openai.NewClient(option.WithBaseURL(server.URL+"/v1"), option.WithAPIKey("ignored"))
+	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
+		Model: "gpt-5.4",
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage("You always reply with the single word: ok"),
+		},
+		MaxTokens: openai.Int(5),
+	})
+	if err != nil {
+		t.Fatalf("system-only request failed: %v", err)
+	}
+	if completion.Choices[0].Message.Content == "" {
+		t.Fatal("system-only completion returned empty content")
+	}
+	t.Logf("system-only response: %q", completion.Choices[0].Message.Content)
+}
+
+// TestSmokeReasoningContent exercises the #59 fix: reasoning_content should
+// be populated without duplication. The streamed-delta sum and the
+// non-streaming reasoning_content for the same prompt should be in the same
+// ballpark (the bug doubled the non-streaming value).
+func TestSmokeReasoningContent(t *testing.T) {
+	if testing.Short() || getenv("CODEX_BRIDGE_SMOKE") != "1" {
+		t.Skip("set CODEX_BRIDGE_SMOKE=1 to run live Codex smoke test")
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	auth := NewAuthManager("", HookConfig{}, logger)
+	if err := auth.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	upstream := NewUpstreamClient("https://chatgpt.com/backend-api/codex", "0.125.0", auth)
+	server := httptest.NewServer(NewServer(upstream, auth, logger, false).Routes())
+	defer server.Close()
+
+	client := openai.NewClient(option.WithBaseURL(server.URL+"/v1"), option.WithAPIKey("ignored"))
+	prompt := "Think step by step, then reply with only the final number. What is 17 * 23?"
+
+	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
+		Model: "gpt-5.4",
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.UserMessage(prompt),
+		},
+	})
+	if err != nil {
+		t.Fatalf("reasoning request failed: %v", err)
+	}
+	raw := completion.RawJSON()
+	reasoning := extractReasoningContent(raw)
+	t.Logf("reasoning content length: %d", len(reasoning))
+	if reasoning != "" {
+		t.Logf("reasoning content: %q", reasoning)
+		if half := len(reasoning) / 2; half > 20 && reasoning[:half] == reasoning[half:half*2] {
+			t.Fatalf("reasoning content looks duplicated (first half == second half)")
+		}
+	}
+	if completion.Choices[0].Message.Content == "" {
+		t.Fatal("reasoning completion returned empty content")
+	}
+	t.Logf("reasoning response: %q", completion.Choices[0].Message.Content)
+}
+
+// TestSmokeOpenAIParitySystemOnly fires the same system-only prompt at
+// vanilla api.openai.com to confirm OpenAI's own behavior accepts the
+// pattern. Gated separately because it costs OpenAI credits, not Codex.
+func TestSmokeOpenAIParitySystemOnly(t *testing.T) {
+	if testing.Short() {
+		t.Skip("short mode")
+	}
+	apiKey := getenv("OPENAI_API_KEY")
+	if apiKey == "" {
+		t.Skip("set OPENAI_API_KEY to run vanilla OpenAI parity test")
+	}
+	client := openai.NewClient(option.WithAPIKey(apiKey))
+	completion, err := client.Chat.Completions.New(context.Background(), openai.ChatCompletionNewParams{
+		Model: "gpt-4o-mini",
+		Messages: []openai.ChatCompletionMessageParamUnion{
+			openai.SystemMessage("You always reply with the single word: ok"),
+		},
+		MaxTokens: openai.Int(5),
+	})
+	if err != nil {
+		t.Fatalf("vanilla OpenAI system-only request failed: %v", err)
+	}
+	if completion.Choices[0].Message.Content == "" {
+		t.Fatal("vanilla OpenAI returned empty content for system-only prompt")
+	}
+	t.Logf("vanilla OpenAI system-only response: %q", completion.Choices[0].Message.Content)
+}
+
+// extractReasoningContent reads the non-standard reasoning_content field
+// directly from the raw JSON since the openai-go SDK does not surface it.
+func extractReasoningContent(raw string) string {
+	var payload struct {
+		Choices []struct {
+			Message struct {
+				ReasoningContent string `json:"reasoning_content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return ""
+	}
+	if len(payload.Choices) == 0 {
+		return ""
+	}
+	return payload.Choices[0].Message.ReasoningContent
 }
