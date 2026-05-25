@@ -394,32 +394,39 @@ func toResponsesTools(tools []ChatTool) ([]responsesTool, error) {
 // that a malformed client request surfaces as a 400 rather than silently
 // becoming "auto" and changing tool-selection behaviour.
 func toResponsesToolChoice(raw json.RawMessage) (any, error) {
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil, fmt.Errorf("tool_choice: %w", err)
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return nil, errors.New("tool_choice: empty")
 	}
-	switch choice := value.(type) {
-	case string:
-		switch choice {
+	switch trimmed[0] {
+	case '"':
+		var s string
+		if err := json.Unmarshal(trimmed, &s); err != nil {
+			return nil, fmt.Errorf("tool_choice: %w", err)
+		}
+		switch s {
 		case "auto", "none", "required":
-			return choice, nil
+			return s, nil
 		default:
-			return nil, fmt.Errorf("tool_choice: unknown value %q", choice)
+			return nil, fmt.Errorf("tool_choice: unknown value %q", s)
 		}
-	case map[string]any:
-		typ, _ := choice["type"].(string)
-		if typ != "function" {
-			return nil, fmt.Errorf("tool_choice: expected type=\"function\", got %q", typ)
+	case '{':
+		var obj struct {
+			Type     string `json:"type"`
+			Function struct {
+				Name string `json:"name"`
+			} `json:"function"`
 		}
-		fn, ok := choice["function"].(map[string]any)
-		if !ok {
-			return nil, errors.New("tool_choice: missing \"function\" object")
+		if err := json.Unmarshal(trimmed, &obj); err != nil {
+			return nil, fmt.Errorf("tool_choice: %w", err)
 		}
-		name, _ := fn["name"].(string)
-		if name == "" {
+		if obj.Type != "function" {
+			return nil, fmt.Errorf("tool_choice: expected type=\"function\", got %q", obj.Type)
+		}
+		if obj.Function.Name == "" {
 			return nil, errors.New("tool_choice: function.name is required")
 		}
-		return responsesToolChoiceFunction{Type: "function", Name: name}, nil
+		return responsesToolChoiceFunction{Type: "function", Name: obj.Function.Name}, nil
 	default:
 		return nil, errors.New("tool_choice: must be a string or {type, function} object")
 	}
