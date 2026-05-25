@@ -268,13 +268,19 @@ func (m *AuthManager) proactiveRefreshLoop(ctx context.Context) {
 			case <-time.After(wait):
 			}
 		}
-		// Skip if another goroutine already refreshed while we were sleeping.
-		if m.auth.Load() != auth {
+		if cur := m.auth.Load(); cur != nil && cur.AccessToken != auth.AccessToken {
 			continue
 		}
 		m.logger.InfoContext(ctx, "proactive token refresh", "expiry", expiry)
 		if err := m.HandleAuthFailure(ctx); err != nil {
 			m.logger.WarnContext(ctx, "proactive token refresh failed", "error", err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(proactiveRefreshRetry):
+			}
+		} else if next := m.auth.Load(); next != nil && next.AccessToken == auth.AccessToken {
+			m.logger.WarnContext(ctx, "proactive token refresh hook ran but token unchanged; backing off", "retry", proactiveRefreshRetry)
 			select {
 			case <-ctx.Done():
 				return
