@@ -30,7 +30,11 @@ func NewUpstreamClient(baseURL, codexVersion string, auth *AuthManager) *Upstrea
 	}
 }
 
+const modelsTimeout = 30 * time.Second
+
 func (c *UpstreamClient) Models(ctx context.Context) ([]string, int, error) {
+	ctx, cancel := context.WithTimeout(ctx, modelsTimeout)
+	defer cancel()
 	path := "/models"
 	if c.codexVersion != "" {
 		path += "?client_version=" + url.QueryEscape(c.codexVersion)
