@@ -63,7 +63,6 @@ Auth lookup order:
 1. `--auth-path`
 2. `CODEX_HOME/auth.json`
 3. `~/.codex/auth.json`
-4. sorted `~/.codex*/auth.json`
 
 The auth file must contain `tokens.access_token`. If `tokens.account_id` is
 missing, `codex-bridge` tries to derive it from `tokens.id_token`.
