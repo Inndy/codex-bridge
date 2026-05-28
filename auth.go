@@ -211,6 +211,7 @@ func deriveAccountID(idToken string) string {
 
 const proactiveRefreshMargin = 10 * time.Minute
 const proactiveRefreshRetry = 5 * time.Minute
+const authFileCheckInterval = time.Minute
 
 // tokenExpiry parses the "exp" claim from a JWT access token.
 // Returns the expiry time and true, or zero time and false if unavailable.
@@ -233,6 +234,30 @@ func tokenExpiry(accessToken string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return time.Unix(claims.Exp, 0), true
+}
+
+// StartAuthFileWatcher starts a goroutine that polls the auth file for token
+// changes made by external processes (e.g. the Codex CLI).
+func (m *AuthManager) StartAuthFileWatcher(ctx context.Context) {
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(authFileCheckInterval):
+			}
+			cur := m.auth.Load()
+			if cur == nil {
+				continue
+			}
+			fresh, err := loadAuthFile(cur.SourcePath)
+			if err != nil || fresh.AccessToken == cur.AccessToken {
+				continue
+			}
+			m.auth.Store(fresh)
+			m.logger.InfoContext(ctx, "auth token reloaded from file", "path", cur.SourcePath)
+		}
+	}()
 }
 
 // StartProactiveRefresh starts a background goroutine that fires the auth hook

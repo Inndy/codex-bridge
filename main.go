@@ -25,6 +25,7 @@ func main() {
 		logger.Error("load auth", "error", err)
 		os.Exit(1)
 	}
+	auth.StartAuthFileWatcher(ctx)
 	auth.StartProactiveRefresh(ctx)
 	upstream := NewUpstreamClient(cfg.CodexBaseURL, cfg.CodexVersion, auth)
 	server := NewServer(upstream, auth, logger, cfg.CORSAllowAll)
